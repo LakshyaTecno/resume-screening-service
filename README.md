@@ -4,25 +4,75 @@ AI microservice (FastAPI) for a recruitment platform — resume parsing, candida
 
 ## Architecture
 
+Two independent pipelines. Resumes never arrive over this service's own API
+— see the [full integration diagram](https://claude.ai/code/artifact/74a361da-b5d2-499a-acea-4bba94496ec6)
+for the complete picture including the upstream S3/SNS/SQS/DynamoDB pieces.
+
+### 1. Ingestion pipeline — resume parsing
+
+Event-driven, not API-driven. An upstream service publishes a
+`resume-uploaded` event → SNS → SQS → this service's worker
+(`app/worker.py`) consumes it, parses the PDF via Ollama, stores it in
+PostgreSQL, and embeds it in Pinecone.
+
 ```mermaid
 flowchart LR
-    subgraph Ingestion
-        PDF[PDF Resume] --> Parser[Resume Parser]
-        Parser --> LLM1[Ollama llama3.1]
-        LLM1 --> PG[(PostgreSQL)]
-    end
+    SQS[SQS: resume-uploaded] --> Worker[app/worker.py]
+    Worker --> Parser[Resume Parser]
+    Parser --> LLM1[Ollama llama3.1]
+    LLM1 --> PG[(PostgreSQL)]
+    LLM1 --> Embed[Ollama nomic-embed-text]
+    Embed --> PC[(Pinecone)]
+```
 
-    subgraph Indexing
-        PG --> Embed[Ollama nomic-embed-text]
-        Embed --> PC[(Pinecone)]
-    end
+Run it locally with:
 
-    subgraph Screening
-        JD[Job Description] --> PC
-        PC -->|Top-K cosine similarity| Shortlist[Candidate Shortlist]
-        Shortlist --> LLM2[Ollama llama3.1]
-        LLM2 -->|Rank + Explain| Results[Ranked Candidates]
-    end
+```bash
+python -m app.worker
+```
+
+Needs `SQS_QUEUE_URL`, `S3_BUCKET_NAME`, `DYNAMODB_TABLE_NAME`, and
+`AWS_REGION` set (see `.env.example`). A successful parse writes
+`status: ai-processed` to DynamoDB for a downstream notification loop.
+
+### 2. Screening pipeline — matching & ranking
+
+API-driven — the two endpoints this service exposes:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/v1/jobs/` | Create job posting → embed |
+| `POST` | `/api/v1/screening/rank` | Hybrid rank candidates for a job |
+
+Plus `GET /health` for liveness/readiness checks. (A few other routes —
+`GET /api/v1/jobs/`, candidate CRUD under `/api/v1/candidates/` — still
+exist in the code for manual/dev testing, but aren't part of the intended
+two-pipeline architecture and aren't documented as a stable public API.)
+
+```mermaid
+flowchart LR
+    JD["POST /jobs"] --> PC[(Pinecone)]
+    PC -->|Top-K cosine similarity| Shortlist[Candidate Shortlist]
+    Shortlist --> LLM2[Ollama llama3.1]
+    LLM2 -->|Rank + Explain| Results["POST /screening/rank response"]
+```
+
+```bash
+# 1. Create a job posting
+curl -X POST http://localhost:8000/api/v1/jobs/ \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Senior Python Developer",
+    "company": "Acme Corp",
+    "description": "Build AI microservices with FastAPI and LangChain.",
+    "required_skills": ["Python", "FastAPI", "PostgreSQL"],
+    "preferred_skills": ["LangChain", "Pinecone", "Docker"]
+  }'
+
+# 2. Rank candidates for the job
+curl -X POST http://localhost:8000/api/v1/screening/rank \
+  -H "Content-Type: application/json" \
+  -d '{"job_id": "<job-uuid>", "top_k": 20, "top_n": 5}'
 ```
 
 ## Features
@@ -113,61 +163,8 @@ uvicorn app.main:app --reload --port 8000
 
 Open [http://localhost:8000/docs](http://localhost:8000/docs) for the interactive API docs.
 
-## API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/v1/candidates/upload` | Upload PDF resume → parse → store → embed |
-| `POST` | `/api/v1/candidates/` | Create candidate from JSON |
-| `GET`  | `/api/v1/candidates/` | List all candidates |
-| `POST` | `/api/v1/jobs/` | Create job posting → embed |
-| `GET`  | `/api/v1/jobs/` | List all jobs |
-| `POST` | `/api/v1/screening/rank` | Hybrid rank candidates for a job |
-| `GET`  | `/health` | Health check |
-
-## Example Workflow
-
-```bash
-# 1. Upload a resume
-curl -X POST http://localhost:8000/api/v1/candidates/upload \
-  -F "file=@resume.pdf"
-
-# 2. Create a job posting
-curl -X POST http://localhost:8000/api/v1/jobs/ \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "Senior Python Developer",
-    "company": "Acme Corp",
-    "description": "Build AI microservices with FastAPI and LangChain.",
-    "required_skills": ["Python", "FastAPI", "PostgreSQL"],
-    "preferred_skills": ["LangChain", "Pinecone", "Docker"]
-  }'
-
-# 3. Rank candidates for the job
-curl -X POST http://localhost:8000/api/v1/screening/rank \
-  -H "Content-Type: application/json" \
-  -d '{"job_id": "<job-uuid>", "top_k": 20, "top_n": 5}'
-```
-
-## Event-Driven Ingestion (optional path)
-
-Alongside the HTTP upload endpoint, `app/worker.py` is a standalone SQS
-consumer for teams that front this service with an async upload pipeline
-(S3 → SNS → SQS): it downloads the PDF, reuses the same
-`candidate_service.create_candidate_from_pdf` parse/store/embed pipeline as
-the HTTP route, then writes a `status: ai-processed` flag to DynamoDB for a
-downstream DynamoDB-Streams-triggered notification loop. Run it with:
-
-```bash
-python -m app.worker
-```
-
-Needs `SQS_QUEUE_URL`, `S3_BUCKET_NAME`, `DYNAMODB_TABLE_NAME`, and
-`AWS_REGION` set (see `.env.example`).
-
-Full integration architecture (upload pipeline, this worker, data stores,
-and the matching/ranking screening flow), diagrammed:
-[Event-driven integration](https://claude.ai/code/artifact/74a361da-b5d2-499a-acea-4bba94496ec6)
+See [Architecture](#architecture) above for the two pipelines, their
+endpoints/entry points, and example requests.
 
 ## Deployment
 
