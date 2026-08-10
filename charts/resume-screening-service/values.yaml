@@ -1,0 +1,72 @@
+image:
+  repository: ghcr.io/CHANGE_ME/resume-screening-service
+  tag: latest
+  pullPolicy: IfNotPresent
+
+api:
+  replicaCount: 2
+  port: 8000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+worker:
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+service:
+  type: ClusterIP
+  port: 80
+
+autoscaling:
+  # CPU-based only. Real backpressure-driven scaling for the worker would watch
+  # SQS queue depth (ApproximateNumberOfMessagesVisible) via KEDA's aws-sqs-queue
+  # scaler instead of CPU - not wired up here since it needs a live queue/cluster
+  # to verify against.
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+# Non-secret settings -> ConfigMap. Keys match app/config.py's pydantic-settings
+# field names (upper-cased), same convention as .env.example.
+config:
+  appName: "Resume Screening Service"
+  debug: "false"
+  # In-cluster service DNS + default ports - NOT the local-Mac shifted ports
+  # (5433/11435) used in docker-compose for host-conflict avoidance.
+  databaseUrl: "postgresql://postgres:postgres@postgres:5432/resume_screening"
+  ollamaBaseUrl: "http://ollama:11434"
+  ollamaLlmModel: "llama3.1"
+  ollamaEmbedModel: "nomic-embed-text"
+  ollamaNumCtx: "2048"
+  ollamaNumPredict: "512"
+  pineconeIndexName: "resume-screening-nomic-768"
+  pineconeCloud: "aws"
+  pineconeRegion: "us-east-1"
+  vectorTopK: "20"
+  rankingTopN: "5"
+  awsRegion: "us-east-1"
+  sqsQueueUrl: ""
+  s3BucketName: ""
+  dynamodbTableName: "resume-processing-status"
+
+# Secret values - pass with `--set secrets.xxx=...` or, better, via an
+# external-secrets operator pointed at a real secret store. Never commit
+# real values into this file.
+secrets:
+  pineconeApiKey: ""
+  # Prefer IAM roles for service accounts (IRSA) over static keys on a real
+  # EKS cluster; these exist for environments without IRSA available.
+  awsAccessKeyId: ""
+  awsSecretAccessKey: ""

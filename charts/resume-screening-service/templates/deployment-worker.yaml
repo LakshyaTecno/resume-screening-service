@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "resume-screening-service.fullname" . }}-worker
+  labels:
+    {{- include "resume-screening-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.worker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "resume-screening-service.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "resume-screening-service.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+    spec:
+      containers:
+        - name: worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # Same image as the API - only the entrypoint differs, so there's no
+          # separate image to build or keep in sync.
+          command: ["python", "-m", "app.worker"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "resume-screening-service.fullname" . }}-config
+            - secretRef:
+                name: {{ include "resume-screening-service.fullname" . }}-secret
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}

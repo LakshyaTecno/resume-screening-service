@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "resume-screening-service.fullname" . }}-config
+  labels:
+    {{- include "resume-screening-service.labels" . | nindent 4 }}
+data:
+  APP_NAME: {{ .Values.config.appName | quote }}
+  DEBUG: {{ .Values.config.debug | quote }}
+  DATABASE_URL: {{ .Values.config.databaseUrl | quote }}
+  OLLAMA_BASE_URL: {{ .Values.config.ollamaBaseUrl | quote }}
+  OLLAMA_LLM_MODEL: {{ .Values.config.ollamaLlmModel | quote }}
+  OLLAMA_EMBED_MODEL: {{ .Values.config.ollamaEmbedModel | quote }}
+  OLLAMA_NUM_CTX: {{ .Values.config.ollamaNumCtx | quote }}
+  OLLAMA_NUM_PREDICT: {{ .Values.config.ollamaNumPredict | quote }}
+  PINECONE_INDEX_NAME: {{ .Values.config.pineconeIndexName | quote }}
+  PINECONE_CLOUD: {{ .Values.config.pineconeCloud | quote }}
+  PINECONE_REGION: {{ .Values.config.pineconeRegion | quote }}
+  VECTOR_TOP_K: {{ .Values.config.vectorTopK | quote }}
+  RANKING_TOP_N: {{ .Values.config.rankingTopN | quote }}
+  AWS_REGION: {{ .Values.config.awsRegion | quote }}
+  SQS_QUEUE_URL: {{ .Values.config.sqsQueueUrl | quote }}
+  S3_BUCKET_NAME: {{ .Values.config.s3BucketName | quote }}
+  DYNAMODB_TABLE_NAME: {{ .Values.config.dynamodbTableName | quote }}
