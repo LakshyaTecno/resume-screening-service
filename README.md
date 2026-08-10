@@ -149,6 +149,47 @@ curl -X POST http://localhost:8000/api/v1/screening/rank \
   -d '{"job_id": "<job-uuid>", "top_k": 20, "top_n": 5}'
 ```
 
+## Event-Driven Ingestion (optional path)
+
+Alongside the HTTP upload endpoint, `app/worker.py` is a standalone SQS
+consumer for teams that front this service with an async upload pipeline
+(S3 → SNS → SQS): it downloads the PDF, reuses the same
+`candidate_service.create_candidate_from_pdf` parse/store/embed pipeline as
+the HTTP route, then writes a `status: ai-processed` flag to DynamoDB for a
+downstream DynamoDB-Streams-triggered notification loop. Run it with:
+
+```bash
+python -m app.worker
+```
+
+Needs `SQS_QUEUE_URL`, `S3_BUCKET_NAME`, `DYNAMODB_TABLE_NAME`, and
+`AWS_REGION` set (see `.env.example`).
+
+## Deployment
+
+- **`Dockerfile`** — multi-stage build; one image serves both the API
+  (default `CMD`) and the worker (`command: ["python", "-m", "app.worker"]`
+  override in the Helm chart).
+- **`charts/resume-screening-service/`** — Helm chart for API + worker
+  Deployments, a Service, ConfigMap/Secret, and an optional
+  CPU-based HPA.
+- **`.github/workflows/ci.yml`** — lint, test, then build + push the image
+  to GHCR on merges to `main`. Never deploys anything itself.
+- **`argocd/application.yaml`** — GitOps: ArgoCD watches this repo's chart
+  and syncs the cluster to match it, rather than CI pushing changes out.
+- **`infra/terraform/`** — the DynamoDB table (with streams enabled) and
+  the notifier Lambda that reacts to status changes, as IaC.
+
+## Documentation
+
+Learning notes written while building out the deployment pipeline above,
+explaining each file in plain language:
+
+- [docs/helm-chart-explained.md](docs/helm-chart-explained.md) — every file
+  in the Helm chart, piece by piece
+- [docs/ci-cd-explained.md](docs/ci-cd-explained.md) — the GitHub Actions
+  workflow, including real failures hit and fixed on its first live run
+
 ## Project Structure
 
 ```
@@ -157,6 +198,7 @@ resume-screening-service/
 │   ├── main.py              # FastAPI entrypoint
 │   ├── config.py            # Settings (Pydantic)
 │   ├── database.py          # SQLAlchemy setup
+│   ├── worker.py            # SQS consumer (event-driven ingestion)
 │   ├── models/
 │   │   ├── db.py            # SQLAlchemy ORM models
 │   │   └── schemas.py       # Pydantic request/response schemas
@@ -165,13 +207,22 @@ resume-screening-service/
 │   │   ├── embeddings.py    # Pinecone vector store
 │   │   ├── matching.py      # LLM match explanations
 │   │   └── ranking.py       # Hybrid retrieval pipeline
+│   ├── repositories/
+│   │   ├── candidate_repository.py
+│   │   └── job_repository.py
 │   ├── routers/
 │   │   ├── candidates.py
 │   │   ├── jobs.py
 │   │   └── screening.py
 │   └── llm/
 │       └── ollama_client.py # LangChain Ollama wrappers
+├── charts/resume-screening-service/  # Helm chart
+├── .github/workflows/ci.yml          # CI
+├── argocd/application.yaml           # GitOps Application
+├── infra/terraform/                  # DynamoDB + notifier Lambda
+├── docs/                             # Learning notes (see above)
 ├── docker-compose.yml
+├── Dockerfile
 ├── pyproject.toml
 └── .env.example
 ```
@@ -183,3 +234,5 @@ resume-screening-service/
 - **Pinecone** — vector database for semantic search
 - **LangChain + Ollama** — local LLM (`llama3.1`) and embeddings (`nomic-embed-text`)
 - **Pydantic** — structured LLM output validation
+- **Docker, Helm, GitHub Actions, ArgoCD, Terraform** — containerization and
+  deployment pipeline (see [Deployment](#deployment) above)
