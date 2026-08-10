@@ -105,18 +105,31 @@ this particular registry (a real external one, like a private AWS ECR,
 would need real credentials configured as repo secrets).
 
 ```yaml
+      - name: Compute lowercase image name
+        id: image
+        run: |
+          echo "repo=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
       - uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
-            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ steps.image.outputs.repo }}:${{ github.sha }}
+            ghcr.io/${{ steps.image.outputs.repo }}:latest
 ```
 This *is* `docker build` + `docker push` — the same Dockerfile from the
 Docker lesson — just running on GitHub's machine instead of yours. Two
 tags: one pinned to the exact commit (`github.sha`, immutable) and a
 floating `latest` (always means "whatever was pushed most recently").
+
+**Real failure hit on the actual first run**: `github.repository` preserves
+the account's real casing (`LakshyaTecno/resume-screening-service`), but
+Docker image names must be all-lowercase — `docker/build-push-action`
+rejected it outright with `repository name must be lowercase`. Fixed by
+adding a step that lowercases it with `tr` and referencing that output
+instead. Small, but a genuinely common gotcha with GHCR specifically (an
+org/user with any uppercase letters in its name hits this immediately).
 
 ## The deliberate stopping point
 

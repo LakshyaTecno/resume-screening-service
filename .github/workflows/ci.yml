@@ -50,14 +50,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Compute lowercase image name
+        id: image
+        run: |
+          # Docker image names must be all-lowercase; github.repository
+          # preserves the account's actual casing (e.g. LakshyaTecno/...),
+          # which docker/build-push-action rejects outright.
+          echo "repo=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
-            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ steps.image.outputs.repo }}:${{ github.sha }}
+            ghcr.io/${{ steps.image.outputs.repo }}:latest
 
     # This job stops at "image pushed". Deploying it is ArgoCD's job, not
     # CI's - it watches charts/resume-screening-service in this repo and
