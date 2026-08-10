@@ -54,7 +54,9 @@ class MatchResult(Base):
     candidate_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("candidates.id"), nullable=False
     )
-    job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("jobs.id"), nullable=False)
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("jobs.id"), nullable=False
+    )
     vector_score: Mapped[float | None] = mapped_column(nullable=True)
     llm_score: Mapped[float | None] = mapped_column(nullable=True)
     rank: Mapped[int | None] = mapped_column(nullable=True)
