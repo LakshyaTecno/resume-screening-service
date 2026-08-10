@@ -192,6 +192,8 @@ explaining each file in plain language:
   workflow, including real failures hit and fixed on its first live run
 - [docs/argocd-explained.md](docs/argocd-explained.md) — `argocd/application.yaml`
   explained, plus notes from actually installing ArgoCD and watching it sync
+- [docs/terraform-dynamodb-lambda-explained.md](docs/terraform-dynamodb-lambda-explained.md) —
+  `infra/terraform/`, the DynamoDB Streams + Lambda pattern, file by file
 - [Event-driven integration architecture](https://claude.ai/code/artifact/74a361da-b5d2-499a-acea-4bba94496ec6) —
   diagram of the full upload → worker → data stores → screening pipeline
 
