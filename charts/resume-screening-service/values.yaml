@@ -3,7 +3,7 @@ image:
   # chart image tag" step after every successful build - this is what lets
   # ArgoCD notice a new image exists, since it only watches git.
   repository: ghcr.io/lakshyatecno/resume-screening-service
-  tag: "8d25ce5a91a0899944bdc4b10f469cfb71dd46b5"
+  tag: "ee798d87408e7cef20fef5384bf4981c977cf0c3"
   pullPolicy: IfNotPresent
 
 api:
