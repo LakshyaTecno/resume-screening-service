@@ -196,6 +196,12 @@ endpoints/entry points, and example requests.
 - **`infra/terraform/`** — the DynamoDB table (with streams enabled), the
   notifier Lambda that reacts to status changes, the SQS queue the worker
   consumes, and the worker's IAM permissions, all as IaC.
+- **Metrics** — `GET /metrics` on the API (`prometheus-fastapi-instrumentator`)
+  and on the worker's own port (`WORKER_METRICS_PORT`, default `9100`),
+  custom counters/histograms for message outcomes and processing time.
+- **`templates/keda-scaledobject.yaml`** — optional queue-depth-based
+  worker autoscaling via KEDA, alternative to the CPU-based HPA (enable at
+  most one — see `values.yaml`).
 
 ## Documentation
 
@@ -216,6 +222,10 @@ explaining each file in plain language:
   real-Postgres + SAVEPOINT test isolation, and where each mock is patched and why
 - [docs/alembic-migrations-explained.md](docs/alembic-migrations-explained.md) —
   adopting Alembic on an already-existing database, and how it's wired to the app's own settings
+- [docs/observability-explained.md](docs/observability-explained.md) — the
+  Prometheus instrumentation on both the API and worker, verified with real `curl` output
+- [docs/keda-autoscaling-explained.md](docs/keda-autoscaling-explained.md) —
+  queue-depth-based autoscaling, and why it's validated statically rather than on a live cluster
 - [Event-driven integration architecture](https://claude.ai/code/artifact/74a361da-b5d2-499a-acea-4bba94496ec6) —
   diagram of the full upload → worker → data stores → screening pipeline
 
@@ -266,5 +276,6 @@ resume-screening-service/
 - **Pinecone** — vector database for semantic search
 - **LangChain + Ollama** — local LLM (`llama3.1`) and embeddings (`nomic-embed-text`)
 - **Pydantic** — structured LLM output validation
+- **Prometheus, KEDA** — metrics on both the API and worker; optional queue-depth-based worker autoscaling
 - **Docker, Helm, GitHub Actions, ArgoCD, Terraform** — containerization and
   deployment pipeline (see [Deployment](#deployment) above)

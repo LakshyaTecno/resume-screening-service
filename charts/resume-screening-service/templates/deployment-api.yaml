@@ -16,6 +16,13 @@ spec:
       labels:
         {{- include "resume-screening-service.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: api
+      annotations:
+        # No Prometheus Operator/ServiceMonitor here - these are the plain
+        # annotations a bare Prometheus server's kubernetes_sd_config scrapes
+        # directly, no extra CRDs required.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "{{ .Values.api.port }}"
+        prometheus.io/path: "/metrics"
     spec:
       containers:
         - name: api

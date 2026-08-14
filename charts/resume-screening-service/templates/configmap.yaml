@@ -22,3 +22,4 @@ data:
   SQS_QUEUE_URL: {{ .Values.config.sqsQueueUrl | quote }}
   S3_BUCKET_NAME: {{ .Values.config.s3BucketName | quote }}
   DYNAMODB_TABLE_NAME: {{ .Values.config.dynamodbTableName | quote }}
+  WORKER_METRICS_PORT: {{ .Values.config.workerMetricsPort | quote }}

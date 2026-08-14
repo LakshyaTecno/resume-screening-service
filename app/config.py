@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     sqs_queue_url: str = ""
     s3_bucket_name: str = ""
     dynamodb_table_name: str = "resume-processing-status"
+    worker_metrics_port: int = Field(default=9100, gt=0)
 
 
 @lru_cache

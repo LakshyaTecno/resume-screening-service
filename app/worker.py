@@ -14,6 +14,7 @@ import logging
 from datetime import datetime, timezone
 
 import boto3
+from prometheus_client import Counter, Histogram, start_http_server
 
 from app.config import get_settings
 from app.database import SessionLocal
@@ -28,6 +29,18 @@ settings = get_settings()
 sqs = boto3.client("sqs", region_name=settings.aws_region)
 s3 = boto3.client("s3", region_name=settings.aws_region)
 dynamodb = boto3.resource("dynamodb", region_name=settings.aws_region)
+
+# One counter per real outcome this worker can have - the labels match the
+# exception branches in run()'s try/except exactly, not an idealized list.
+MESSAGES_PROCESSED = Counter(
+    "resume_worker_messages_processed_total",
+    "Messages this worker has finished handling, by outcome.",
+    ["outcome"],
+)
+PROCESSING_DURATION = Histogram(
+    "resume_worker_processing_duration_seconds",
+    "Time spent in _process_message() per message, regardless of outcome.",
+)
 
 
 def _mark_status(candidate_id: str, status: str) -> None:
@@ -72,7 +85,12 @@ def run() -> None:
     if not settings.sqs_queue_url:
         raise RuntimeError("SQS_QUEUE_URL is not configured")
 
-    logger.info("Worker started, polling %s", settings.sqs_queue_url)
+    start_http_server(settings.worker_metrics_port)
+    logger.info(
+        "Worker started, polling %s (metrics on :%d)",
+        settings.sqs_queue_url,
+        settings.worker_metrics_port,
+    )
     while True:
         response = sqs.receive_message(
             QueueUrl=settings.sqs_queue_url,
@@ -84,18 +102,23 @@ def run() -> None:
             receipt_handle = message["ReceiptHandle"]
             try:
                 body = json.loads(message["Body"])
-                _process_message(body)
+                with PROCESSING_DURATION.time():
+                    _process_message(body)
                 sqs.delete_message(QueueUrl=settings.sqs_queue_url, ReceiptHandle=receipt_handle)
+                MESSAGES_PROCESSED.labels(outcome="success").inc()
             except ResumeContentError as exc:
                 # Not retryable - bad input. Drop it rather than retry forever.
                 logger.warning("Discarding unprocessable message: %s", exc)
                 sqs.delete_message(QueueUrl=settings.sqs_queue_url, ReceiptHandle=receipt_handle)
+                MESSAGES_PROCESSED.labels(outcome="content_error").inc()
             except (ResumeParserUnavailableError, VectorIndexingError) as exc:
                 # Transient infra failure - leave the message for SQS's visibility-timeout
                 # retry (and eventual redrive to a dead-letter queue, if one is configured).
                 logger.error("Transient failure, will retry: %s", exc)
+                MESSAGES_PROCESSED.labels(outcome="transient_error").inc()
             except Exception:
                 logger.exception("Unexpected error processing message %s", message.get("MessageId"))
+                MESSAGES_PROCESSED.labels(outcome="unexpected_error").inc()
 
 
 if __name__ == "__main__":
