@@ -6,12 +6,17 @@ AI microservice (FastAPI) for a recruitment platform — resume parsing, candida
 
 Two independent pipelines. Resumes never arrive over this service's own API
 — see the [full integration diagram](https://claude.ai/code/artifact/74a361da-b5d2-499a-acea-4bba94496ec6)
-for the complete picture including the upstream S3/SNS/SQS/DynamoDB pieces.
+for the complete picture including the upstream S3/SQS/DynamoDB pieces.
+(That diagram predates a later simplification — see
+[docs/terraform-sqs-explained.md](docs/terraform-sqs-explained.md) for why
+this uses plain SQS, not SNS fan-out.)
 
 ### 1. Ingestion pipeline — resume parsing
 
 Event-driven, not API-driven. An upstream service publishes a
-`resume-uploaded` event → SNS → SQS → this service's worker
+`resume-uploaded` event directly to an SQS queue — no SNS topic in front of
+it, since fan-out to multiple consumers only pays off if there's more than
+one, and this service is the only consumer. This service's worker
 (`app/worker.py`) consumes it, parses the PDF via Ollama, stores it in
 PostgreSQL, and embeds it in Pinecone.
 
@@ -188,8 +193,9 @@ endpoints/entry points, and example requests.
   to GHCR on merges to `main`. Never deploys anything itself.
 - **`argocd/application.yaml`** — GitOps: ArgoCD watches this repo's chart
   and syncs the cluster to match it, rather than CI pushing changes out.
-- **`infra/terraform/`** — the DynamoDB table (with streams enabled) and
-  the notifier Lambda that reacts to status changes, as IaC.
+- **`infra/terraform/`** — the DynamoDB table (with streams enabled), the
+  notifier Lambda that reacts to status changes, the SQS queue the worker
+  consumes, and the worker's IAM permissions, all as IaC.
 
 ## Documentation
 
@@ -204,6 +210,8 @@ explaining each file in plain language:
   explained, plus notes from actually installing ArgoCD and watching it sync
 - [docs/terraform-dynamodb-lambda-explained.md](docs/terraform-dynamodb-lambda-explained.md) —
   `infra/terraform/`, the DynamoDB Streams + Lambda pattern, file by file
+- [docs/terraform-sqs-explained.md](docs/terraform-sqs-explained.md) — the
+  worker's SQS queue and IAM permissions, and why this uses plain SQS instead of SNS fan-out
 - [docs/testing-explained.md](docs/testing-explained.md) — the pytest suite:
   real-Postgres + SAVEPOINT test isolation, and where each mock is patched and why
 - [docs/alembic-migrations-explained.md](docs/alembic-migrations-explained.md) —
@@ -242,7 +250,7 @@ resume-screening-service/
 ├── charts/resume-screening-service/  # Helm chart
 ├── .github/workflows/ci.yml          # CI
 ├── argocd/application.yaml           # GitOps Application
-├── infra/terraform/                  # DynamoDB + notifier Lambda
+├── infra/terraform/                  # DynamoDB, notifier Lambda, SQS, worker IAM
 ├── tests/                            # pytest, happy-path (see docs)
 ├── docs/                             # Learning notes (see above)
 ├── docker-compose.yml

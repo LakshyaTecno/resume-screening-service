@@ -1,6 +1,6 @@
 """SQS-driven ingestion worker.
 
-Consumes `resume-uploaded` events fanned out via SNS -> SQS, downloads the
+Consumes `resume-uploaded` events published directly to SQS, downloads the
 source PDF from S3, and reuses the existing HTTP-upload pipeline
 (`candidate_service.create_candidate_from_pdf`) to parse, store, and embed
 the resume. Reports status back to DynamoDB, which feeds the existing
