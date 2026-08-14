@@ -14,7 +14,7 @@ spec:
   project: default
 
   source:
-    repoURL: CHANGE_ME # e.g. https://github.com/<org>/resume-screening-service.git
+    repoURL: https://github.com/LakshyaTecno/resume-screening-service.git
     targetRevision: main
     path: charts/resume-screening-service
     helm:
