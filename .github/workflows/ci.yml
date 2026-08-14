@@ -58,6 +58,9 @@ jobs:
     needs: lint-and-test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
@@ -85,6 +88,23 @@ jobs:
             ghcr.io/${{ steps.image.outputs.repo }}:${{ github.sha }}
             ghcr.io/${{ steps.image.outputs.repo }}:latest
 
-    # This job stops at "image pushed". Deploying it is ArgoCD's job, not
-    # CI's - it watches charts/resume-screening-service in this repo and
-    # pulls, rather than CI pushing to a cluster. See argocd/application.yaml.
+      - name: Update Helm chart image tag
+        run: |
+          # This is the CI -> CD bridge: ArgoCD only watches git, never the
+          # registry, so pushing a new image under a floating tag alone
+          # gives it nothing to react to. Writing the real tag back into
+          # values.yaml is what actually closes the loop.
+          sed -i "s|repository: .*|repository: ghcr.io/${{ steps.image.outputs.repo }}|" charts/resume-screening-service/values.yaml
+          sed -i "s|tag: .*|tag: \"${{ github.sha }}\"|" charts/resume-screening-service/values.yaml
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add charts/resume-screening-service/values.yaml
+          # [skip ci] is load-bearing: without it, this commit would trigger
+          # another run of this exact workflow, forever.
+          git diff --staged --quiet || git commit -m "chore: bump image tag to ${{ github.sha }} [skip ci]"
+          git push
+
+    # This job stops at "image pushed, chart updated". Deploying it is
+    # ArgoCD's job, not CI's - it watches charts/resume-screening-service
+    # in this repo and pulls, rather than CI pushing to a cluster. See
+    # argocd/application.yaml.

@@ -1,5 +1,8 @@
 image:
-  repository: ghcr.io/CHANGE_ME/resume-screening-service
+  # Kept up to date automatically by .github/workflows/ci.yml's "Update Helm
+  # chart image tag" step after every successful build - this is what lets
+  # ArgoCD notice a new image exists, since it only watches git.
+  repository: ghcr.io/lakshyatecno/resume-screening-service
   tag: latest
   pullPolicy: IfNotPresent
 

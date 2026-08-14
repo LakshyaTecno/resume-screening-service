@@ -20,11 +20,11 @@ spec:
     helm:
       valueFiles:
         - values.yaml
-      # Pin the deployed image tag here per-environment (e.g. the CI-built git
-      # sha) rather than trusting `latest`, which Argo won't detect changes to.
-      parameters:
-        - name: image.tag
-          value: latest
+      # No image.tag override here on purpose: CI writes the real current
+      # tag directly into values.yaml after every build (see
+      # .github/workflows/ci.yml), so values.yaml itself is always correct.
+      # An override here would fight that and pin the deployment to a
+      # stale/wrong tag regardless of what CI just built.
 
   destination:
     server: https://kubernetes.default.svc

@@ -58,22 +58,23 @@ unrestricted catch-all.
     helm:
       valueFiles:
         - values.yaml
-      parameters:
-        - name: image.tag
-          value: latest
 ```
 `repoURL: CHANGE_ME` is exactly what had to be swapped for the real GitHub
 URL during the hands-on run. `path` is why ArgoCD only cares about
 `charts/resume-screening-service` and ignores everything else in this same
-repo (`app/`, `docs/`, `infra/terraform/`). `helm.parameters` is the same
-override mechanism as `--set` — the demo also needed `image.repository` and
-`image.tag: local` added, since it wasn't using a real GHCR image.
+repo (`app/`, `docs/`, `infra/terraform/`). `helm.parameters` (the same
+override mechanism as `--set`) was used during the hands-on demo to force
+`image.repository`/`image.tag: local`, since that run wasn't using a real
+GHCR image.
 
-**Why `image.tag: latest` is discouraged for real use**: ArgoCD only
-watches *git*, not your image registry. Push a new image under the same
-`latest` tag with no new commit, and Argo has no way to notice anything
-changed — pin to something git-visible instead (e.g. the CI-built commit
-SHA).
+**No `image.tag` override here anymore, and that's deliberate**: ArgoCD
+only watches *git*, never your image registry — pinning a tag here used to
+be necessary because `values.yaml` couldn't be trusted to hold the real
+current tag. Now CI writes the real tag directly into `values.yaml` after
+every build (see `docs/ci-cd-explained.md`'s "Closing the loop" section),
+so `values.yaml` itself is always correct. An override here today would
+actively *fight* that — pinning the deployment to a stale tag no matter
+what CI just built.
 
 ## `spec.destination`
 

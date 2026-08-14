@@ -133,8 +133,54 @@ org/user with any uppercase letters in its name hits this immediately).
 
 ## The deliberate stopping point
 
-This workflow never touches a cluster. It stops the moment the image exists
-in GHCR. That boundary is intentional — deploying it is a separate concern,
-handled by ArgoCD (`argocd/application.yaml`), which watches this repo's
-Helm chart and pulls changes rather than CI pushing them. That split is
-what "GitOps" actually means, and it's the next topic.
+This workflow never touches a cluster. It never runs `kubectl` or `helm
+install`. Deploying is a separate concern, handled by ArgoCD
+(`argocd/application.yaml`), which watches this repo's Helm chart and pulls
+changes rather than CI pushing them. That split is what "GitOps" actually
+means.
+
+## Closing the loop: the image-tag bridge
+
+For a while, this workflow genuinely stopped right after "image pushed" —
+and that was a real bug, not a design choice. ArgoCD only watches **git**,
+never the registry. Pushing a new image tagged `latest` doesn't give
+ArgoCD anything to react to, because nothing in git changed. A hundred new
+images could get pushed under that same floating tag and ArgoCD would sit
+there reporting `Synced`, unaware anything happened.
+
+The fix, added as the very last step of `build-and-push`:
+
+```yaml
+      - name: Update Helm chart image tag
+        run: |
+          sed -i "s|repository: .*|repository: ghcr.io/${{ steps.image.outputs.repo }}|" charts/resume-screening-service/values.yaml
+          sed -i "s|tag: .*|tag: \"${{ github.sha }}\"|" charts/resume-screening-service/values.yaml
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add charts/resume-screening-service/values.yaml
+          git diff --staged --quiet || git commit -m "chore: bump image tag to ${{ github.sha }} [skip ci]"
+          git push
+```
+
+CI writes the new tag directly into `values.yaml` and pushes that commit
+back to `main` itself. *Now* there's a real git change — and that's the
+whole trick, since ArgoCD's entire job is reacting to exactly that.
+
+**The one thing that would silently break this**: that commit lands on
+`main`, which is exactly what triggers this workflow in the first place
+(`on: push: branches: [main]`). Without a guard, every deploy would
+trigger a new CI run that deploys itself, forever. `[skip ci]` in the
+commit message is load-bearing — GitHub Actions recognizes that exact
+marker and won't start a new run for a commit containing it.
+
+`git diff --staged --quiet || git commit ...` is the other small but
+necessary piece: without it, re-running this job against a commit whose
+tag was already written would hit "nothing to commit" and fail the step
+outright.
+
+**Permissions**: `build-and-push` gets its own job-level `permissions:
+{ contents: write, packages: write }`, separate from the workflow's
+top-level `contents: read`. Job-level permissions *replace* the top-level
+block for that job rather than adding to it — `lint-and-test` never gets
+write access to the repo, only the one job that actually needs to push a
+commit does.
