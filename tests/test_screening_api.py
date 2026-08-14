@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 from app.models.db import Candidate
 from app.services import ranking
 from tests.factories import make_match_explanation
@@ -78,3 +80,29 @@ def test_rank_candidates_by_job_id_path_happy_path(
 
     assert response.status_code == 200
     assert response.json()["total_candidates_screened"] == 1
+
+
+def test_rank_candidates_job_not_found_returns_404(client):
+    response = client.post(
+        "/api/v1/screening/rank",
+        json={"job_id": str(uuid4())},
+    )
+
+    assert response.status_code == 404
+
+
+def test_rank_candidates_no_vector_matches_returns_empty_result(client, mock_vector_store):
+    """mock_vector_store's default query_similar_candidates already returns
+    [] - this locks in that "no matches" is a valid, non-error result, not
+    something that should 500 or need a special case."""
+    job_id = _create_job(client)
+
+    response = client.post(
+        "/api/v1/screening/rank",
+        json={"job_id": job_id},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_candidates_screened"] == 0
+    assert body["ranked_candidates"] == []

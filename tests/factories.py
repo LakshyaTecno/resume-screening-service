@@ -35,6 +35,13 @@ class FakePdfReader:
         self.pages = [FakePdfPage("Jane Doe\nSoftware Engineer\nPython, SQL")]
 
 
+class FakeEmptyPdfReader:
+    """Stand-in for a scanned/blank PDF - pages exist but extract no text."""
+
+    def __init__(self, stream):
+        self.pages = [FakePdfPage(""), FakePdfPage("")]
+
+
 def make_parsed_resume(**overrides) -> ParsedResume:
     defaults = dict(
         full_name="Jane Doe",

@@ -1,5 +1,7 @@
+import pytest
+
 from app.services import resume_parser
-from tests.factories import FakePdfReader, FakeStructuredLLM, make_parsed_resume
+from tests.factories import FakeEmptyPdfReader, FakePdfReader, FakeStructuredLLM, make_parsed_resume
 
 
 def test_extract_text_from_pdf_happy_path(monkeypatch):
@@ -29,3 +31,12 @@ def test_parse_resume_pdf_happy_path(monkeypatch):
 
     assert result.full_name == "Jane Doe"
     assert raw_text == "Jane Doe\nSoftware Engineer\nPython, SQL"
+
+
+def test_parse_resume_pdf_blank_pdf_raises_value_error(monkeypatch):
+    """A scanned/blank PDF extracts no text - this must fail loudly rather
+    than silently hand an empty string to the LLM."""
+    monkeypatch.setattr(resume_parser, "PdfReader", FakeEmptyPdfReader)
+
+    with pytest.raises(ValueError, match="Could not extract text"):
+        resume_parser.parse_resume_pdf(b"%PDF-1.4 fake bytes")

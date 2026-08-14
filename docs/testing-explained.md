@@ -138,3 +138,22 @@ docker compose exec postgres psql -U postgres -c "CREATE DATABASE resume_screeni
 
 pytest -v
 ```
+
+## Error/edge-case coverage (added after the happy-path pass)
+
+Same fixtures, same mocking patterns — just exercising the other branch of
+each `try`/`except` in `app/exceptions.py`'s exception-to-HTTP-status
+mapping:
+
+- Blank/scanned PDF → `ValueError` (`resume_parser`)
+- Non-PDF upload → `400`
+- Unparseable resume (`ValueError` from parsing) → `422`
+- LLM unavailable (generic exception from parsing) → `503`
+- Vector indexing failure on create → `502`
+- Unknown candidate/job id → `404`
+- Unknown job id on `/screening/rank` → `404`
+- Zero vector matches → a valid empty result (`200`, not an error) — worth
+  locking in explicitly so "no candidates found" never regresses into a 500
+- `app/worker.py`'s `_process_message` correctly propagates
+  `ResumeContentError` for an empty resume, and never reaches
+  `_mark_status` when it does (verified via `fake_table.update_item.assert_not_called()`)
