@@ -1,19 +1,9 @@
-from contextlib import asynccontextmanager
-
 from fastapi import FastAPI
 
 from app.config import get_settings
-from app.database import init_db
 from app.routers import candidates, jobs, screening
 
 settings = get_settings()
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    init_db()
-    yield
-
 
 app = FastAPI(
     title=settings.app_name,
@@ -22,7 +12,6 @@ app = FastAPI(
         "Uses LangChain + Ollama for local LLM inference and Pinecone for vector search."
     ),
     version="0.1.0",
-    lifespan=lifespan,
 )
 
 app.include_router(candidates.router, prefix="/api/v1")

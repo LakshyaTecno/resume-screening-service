@@ -44,6 +44,11 @@ jobs:
       - name: Lint (isort)
         run: isort --check-only .
 
+      - name: Verify migrations apply to a fresh database
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/resume_screening_test
+        run: alembic upgrade head
+
       - name: Test
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/resume_screening_test

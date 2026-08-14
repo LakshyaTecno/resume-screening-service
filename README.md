@@ -155,7 +155,17 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-### 4. Run the service
+### 4. Apply database migrations
+
+```bash
+alembic upgrade head
+```
+
+The app no longer creates its own tables on startup — schema is owned by
+Alembic (`alembic/versions/`), applied explicitly. See
+[docs/alembic-migrations-explained.md](docs/alembic-migrations-explained.md).
+
+### 5. Run the service
 
 ```bash
 uvicorn app.main:app --reload --port 8000
@@ -196,6 +206,8 @@ explaining each file in plain language:
   `infra/terraform/`, the DynamoDB Streams + Lambda pattern, file by file
 - [docs/testing-explained.md](docs/testing-explained.md) — the pytest suite:
   real-Postgres + SAVEPOINT test isolation, and where each mock is patched and why
+- [docs/alembic-migrations-explained.md](docs/alembic-migrations-explained.md) —
+  adopting Alembic on an already-existing database, and how it's wired to the app's own settings
 - [Event-driven integration architecture](https://claude.ai/code/artifact/74a361da-b5d2-499a-acea-4bba94496ec6) —
   diagram of the full upload → worker → data stores → screening pipeline
 
@@ -225,6 +237,8 @@ resume-screening-service/
 │   │   └── screening.py
 │   └── llm/
 │       └── ollama_client.py # LangChain Ollama wrappers
+├── alembic/versions/                 # DB schema migrations
+├── alembic.ini
 ├── charts/resume-screening-service/  # Helm chart
 ├── .github/workflows/ci.yml          # CI
 ├── argocd/application.yaml           # GitOps Application
@@ -240,7 +254,7 @@ resume-screening-service/
 ## Tech Stack
 
 - **FastAPI** — async REST API
-- **PostgreSQL + SQLAlchemy** — structured candidate/job records
+- **PostgreSQL + SQLAlchemy + Alembic** — structured candidate/job records, schema managed via migrations
 - **Pinecone** — vector database for semantic search
 - **LangChain + Ollama** — local LLM (`llama3.1`) and embeddings (`nomic-embed-text`)
 - **Pydantic** — structured LLM output validation
