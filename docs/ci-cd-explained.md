@@ -184,3 +184,14 @@ top-level `contents: read`. Job-level permissions *replace* the top-level
 block for that job rather than adding to it — `lint-and-test` never gets
 write access to the repo, only the one job that actually needs to push a
 commit does.
+
+**A real mistake, on the very first attempt to verify this**: the commit
+that introduced this whole fix *explained* the skip-ci marker in its own
+message — in English, describing what the marker does. GitHub Actions
+doesn't parse intent; it just checks whether that exact bracketed text
+appears anywhere in the commit message. Explaining the mechanism was
+enough to trigger it. That commit silently skipped its own CI run, so the
+change that added CI verification shipped with zero verification the
+first time around. Lesson: never write that literal marker text in a
+commit message unless you actually mean to skip that commit specifically
+— including inside an explanation of what it does.
