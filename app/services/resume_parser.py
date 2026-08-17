@@ -12,7 +12,12 @@ PARSE_PROMPT = ChatPromptTemplate.from_messages(
             "system",
             """You are an expert resume parser. Extract structured information from the resume text.
 Return accurate, concise data. If a field is not present, use null or an empty list.
-For dates, use formats like "2020-01" or "Present".""",
+For dates, use formats like "2020-01" or "Present".
+
+Do not skip these fields when the source text contains them:
+- summary: copy the professional summary paragraph if the resume has one.
+- experience[].description: copy or tightly summarize the 1-2 sentences describing each job, if present.
+These fields are commonly missed - double check the source text for them before leaving them null.""",
         ),
         ("human", "Parse the following resume:\n\n{resume_text}"),
     ]
