@@ -131,40 +131,29 @@ adding a step that lowercases it with `tr` and referencing that output
 instead. Small, but a genuinely common gotcha with GHCR specifically (an
 org/user with any uppercase letters in its name hits this immediately).
 
-## The deliberate stopping point
-
-This workflow never touches a cluster. It never runs `kubectl` or `helm
-install`. Deploying is a separate concern, handled by ArgoCD
-(`argocd/application.yaml`), which watches this repo's Helm chart and pulls
-changes rather than CI pushing them. That split is what "GitOps" actually
-means.
-
-## Closing the loop: the image-tag bridge
+## Closing the loop: the `deploy` job
 
 For a while, this workflow genuinely stopped right after "image pushed" —
-and that was a real bug, not a design choice. ArgoCD only watches **git**,
-never the registry. Pushing a new image tagged `latest` doesn't give
-ArgoCD anything to react to, because nothing in git changed. A hundred new
-images could get pushed under that same floating tag and ArgoCD would sit
-there reporting `Synced`, unaware anything happened.
+CI built and published an image to GHCR, but nothing ever ran it anywhere.
+The fix is a third job, `deploy`, that `needs: build-and-push` and runs
+`docker compose -f docker-compose.yml -f docker-compose.prod.yml pull && up -d`.
 
-The fix, added as the very last step of `build-and-push`:
+**Why that job runs on a self-hosted runner, not `ubuntu-latest`**: the app
+runs on Docker Compose on a specific machine, not a cluster CI can push
+into generically — GitHub's hosted runners are throwaway cloud VMs with no
+way to reach that machine. A self-hosted runner is a small background
+service installed directly on it; it polls GitHub for jobs and executes
+them locally, so a workflow step really can restart that machine's
+containers.
 
-```yaml
-      - name: Update Helm chart image tag
-        run: |
-          sed -i "s|repository: .*|repository: ghcr.io/${{ steps.image.outputs.repo }}|" charts/resume-screening-service/values.yaml
-          sed -i "s|tag: .*|tag: \"${{ github.sha }}\"|" charts/resume-screening-service/values.yaml
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add charts/resume-screening-service/values.yaml
-          git diff --staged --quiet || git commit -m "chore: bump image tag to ${{ github.sha }} [skip ci]"
-          git push
-```
-
-CI writes the new tag directly into `values.yaml` and pushes that commit
-back to `main` itself. *Now* there's a real git change — and that's the
-whole trick, since ArgoCD's entire job is reacting to exactly that.
+**Why it's safe to run on a public repo**: `deploy` inherits `build-and-push`'s
+`if: github.event_name == 'push' && github.ref == 'refs/heads/main'`
+condition through `needs:` — a job only runs if everything in `needs`
+actually ran. That job never runs on `pull_request`. This matters
+specifically because self-hosted runners reachable from a fork's PR are a
+known way for a stranger to execute code on that machine — worth stating
+explicitly here, since it'd be an easy thing to break by adding a
+`pull_request`-triggered job that also targets `self-hosted`.
 
 **The one thing that would silently break this**: that commit lands on
 `main`, which is exactly what triggers this workflow in the first place

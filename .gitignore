@@ -16,8 +16,5 @@ infra/terraform/.terraform/
 infra/terraform/*.tfstate
 infra/terraform/*.tfstate.*
 infra/terraform/*.tfplan
+infra/terraform/destroy-plan
 infra/terraform/lambda/notifier/handler.zip
-
-# Helm
-charts/**/charts/
-charts/**/*.tgz

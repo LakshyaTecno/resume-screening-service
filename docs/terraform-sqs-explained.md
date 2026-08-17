@@ -92,11 +92,11 @@ it — same "reference, don't duplicate" pattern as
 
 **Why a policy, not a role**: a role needs a trust policy — a statement
 saying *who* is allowed to assume it. That depends entirely on how the
-worker actually gets deployed (IAM Roles for Service Accounts on a real
-EKS cluster, an EC2 instance profile, etc.), and provisioning that cluster
-is out of scope here, same as everywhere else this project draws that
-line. `worker_permissions` is a standalone, attachable policy document —
-whatever identity ends up running the worker attaches it.
+worker actually gets deployed (an EC2 instance profile, credentials
+mounted into a container, etc.), and this project deliberately keeps that
+decision separate from the permissions themselves. `worker_permissions` is
+a standalone, attachable policy document — whatever identity ends up
+running the worker attaches it.
 
 ## `resume_uploads_bucket_arn` — a placeholder, on purpose
 
@@ -108,6 +108,5 @@ variable "resume_uploads_bucket_arn" {
 
 The S3 bucket resumes get uploaded to is Service A's infrastructure, per
 the original architecture — not created here, only referenced so the IAM
-policy can grant read access to it. Same `CHANGE_ME` convention already
-used in `argocd/application.yaml`'s `repoURL` — a clear signal that a real
-value has to be supplied before this could actually be applied.
+policy can grant read access to it. `CHANGE_ME` is a clear signal that a
+real value has to be supplied before this could actually be applied.

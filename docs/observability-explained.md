@@ -65,21 +65,5 @@ of whether SQS itself is reachable.
 
 `app/config.py` gained `worker_metrics_port: int = 9100` — the API already
 had a port (8000, reused for `/metrics` too), but the worker had no ports
-at all before this (see `docs/helm-chart-explained.md`'s note on
-`deployment-worker.yaml` having no `ports:` block, on purpose, since it
-runs no web server). Now it has exactly one, purely for metrics.
-
-## Helm: plain annotations, not a Prometheus Operator setup
-
-```yaml
-annotations:
-  prometheus.io/scrape: "true"
-  prometheus.io/port: "9100"
-  prometheus.io/path: "/metrics"
-```
-
-These are the annotations a bare Prometheus server's
-`kubernetes_sd_configs` scrapes directly — no `ServiceMonitor` custom
-resource, no Prometheus Operator required. Consistent with not deploying a
-full monitoring stack: this marks *where* metrics live, without assuming
-anything about what (if anything) is actually scraping them yet.
+at all before this, since it runs no web server of its own. Now it has
+exactly one, purely for metrics, published in `docker-compose.yml`.

@@ -1,9 +1,9 @@
 # Terraform + DynamoDB Streams + Lambda, explained
 
-Notes on `infra/terraform/`. Verified with `terraform init`, `terraform
-validate`, and `terraform fmt` earlier in this project (all passed) — no
-real `terraform apply` has been run, since that needs real AWS credentials
-and creates real, billable resources.
+Notes on `infra/terraform/`. This was applied for real — the queue, table,
+Lambda, and IAM policy all existed as live AWS resources — then destroyed
+once verified, since nothing in this project needs them running
+continuously. `terraform apply` recreates them from this same config.
 
 ## Terraform's core idea
 
@@ -37,9 +37,9 @@ talks to AWS's API; `archive` is a small utility used later to zip a file.
 
 Terraform's input parameters — the same role as Helm's `values.yaml`,
 different tool. `table_name` defaults to `"resume-processing-status"`,
-which has to *manually* match `dynamodbTableName` in the Helm chart's
-`values.yaml` and `app/config.py`'s default. Three tools, three places,
-nothing automatically keeps them in sync — a real footgun to remember.
+which has to *manually* match `app/config.py`'s `dynamodb_table_name`
+default. Two places, nothing automatically keeps them in sync — a real
+footgun to remember.
 
 ## `dynamodb.tf` — the table + the "Streams" half
 

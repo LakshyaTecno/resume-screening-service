@@ -111,13 +111,11 @@ conflict.
 
 ## What's deliberately not done here
 
-- **No Kubernetes/Helm migration step.** The Helm chart still assumes the
-  schema already exists — an initContainer or a one-shot Job running
-  `alembic upgrade head` before the app starts is the natural next piece,
-  not built in this pass. Same treatment as the documented KEDA/queue-depth
-  autoscaling gap.
-- **`Dockerfile` doesn't copy `alembic.ini`/`alembic/` into the image** —
-  only `COPY app ./app`. Irrelevant until the deployment wiring above
+- **Update, since this was written**: this gap is closed. The `Dockerfile`
+  now copies `alembic.ini`/`alembic/` into the image, and `docker-compose.yml`'s
+  `api` service command is `sh -c "alembic upgrade head && uvicorn ..."` —
+  migrations run automatically on every container start, no separate step
+  needed.
   happens; not a gap on its own right now, since nothing currently needs
   to run migrations from inside the built image.
 - **The pytest suite still uses `Base.metadata.create_all()`**, not real
