@@ -27,6 +27,48 @@ services:
     # docker compose exec ollama ollama pull llama3.1
     # docker compose exec ollama ollama pull nomic-embed-text
 
+  api:
+    build: .
+    env_file: .env
+    environment:
+      # .env's DATABASE_URL/OLLAMA_BASE_URL point at host-mapped ports, for
+      # running api/worker directly on the host. Inside the compose network,
+      # containers reach each other by service name on their internal ports.
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/resume_screening
+      OLLAMA_BASE_URL: http://ollama:11434
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # No curl/wget in the slim runtime image - python is guaranteed present.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  worker:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/resume_screening
+      OLLAMA_BASE_URL: http://ollama:11434
+    command: python -m app.worker
+    ports:
+      - "9100:9100"
+    volumes:
+      # Read-only AWS credentials for the real SQS/S3/DynamoDB pipeline -
+      # the container's `app` user has HOME=/app (set in the Dockerfile).
+      - ~/.aws:/app/.aws:ro
+    depends_on:
+      # Waits on api's healthcheck, not just postgres, so migrations (which
+      # api's command runs first) are guaranteed to have already applied.
+      api:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   ollama_data:

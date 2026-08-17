@@ -18,6 +18,8 @@ RUN groupadd --system app && useradd --system --gid app --home /app app
 
 COPY --from=builder /opt/venv /opt/venv
 COPY app ./app
+COPY alembic.ini ./alembic.ini
+COPY alembic ./alembic
 
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
@@ -26,5 +28,5 @@ ENV PATH="/opt/venv/bin:$PATH" \
 USER app
 EXPOSE 8000
 
-# Overridden with `python -m app.worker` for the worker deployment (see the Helm chart).
+# Overridden with `python -m app.worker` for the worker service (see docker-compose.yml).
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

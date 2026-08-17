@@ -1,0 +1,16 @@
+# Deploy-time override, applied on top of docker-compose.yml.
+#
+# The base file builds api/worker from local source (`build: .`) - right
+# for day-to-day coding, where you want a rebuild to pick up your latest
+# edits instantly. The deploy path (the self-hosted-runner CD job) wants
+# the opposite: run exactly what CI already built and pushed to GHCR,
+# nothing rebuilt locally. `image:` here overrides `build:` for that case.
+#
+# Usage (what the CD job runs):
+#   IMAGE_TAG=<git sha> docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+#   IMAGE_TAG=<git sha> docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+services:
+  api:
+    image: ghcr.io/lakshyatecno/resume-screening-service:${IMAGE_TAG}
+  worker:
+    image: ghcr.io/lakshyatecno/resume-screening-service:${IMAGE_TAG}

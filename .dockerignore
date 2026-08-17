@@ -11,6 +11,5 @@ build/
 .env
 uploads/
 *.db
-charts/
 infra/
 .github/
