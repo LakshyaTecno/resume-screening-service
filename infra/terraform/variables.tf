@@ -22,8 +22,8 @@ variable "sqs_queue_name" {
   default     = "resume-uploaded"
 }
 
-variable "resume_uploads_bucket_arn" {
-  description = "ARN of the S3 bucket resumes are uploaded to. In a real deployment this is Service A's infrastructure, referenced not created here - default below is a bucket created by hand (aws s3api create-bucket, not Terraform) purely to test the worker's IAM policy end-to-end."
+variable "resume_uploads_bucket_name" {
+  description = "Name of the S3 bucket resumes are uploaded to (see s3.tf). Owned by this service - app/services/ingestion.py puts objects here, app/worker.py reads them back."
   type        = string
-  default     = "arn:aws:s3:::resume-uploads-208618103838"
+  default     = "resume-uploads-208618103838"
 }

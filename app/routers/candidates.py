@@ -5,12 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.auth import require_api_key
 from app.database import get_db
-from app.exceptions import (
-    ResourceNotFoundError,
-    ResumeContentError,
-    ResumeParserUnavailableError,
-    VectorIndexingError,
-)
+from app.exceptions import ResourceNotFoundError, VectorIndexingError
 from app.models.schemas import CandidateCreate, CandidateResponse
 from app.services import candidate_service
 
@@ -29,24 +24,20 @@ def create_candidate(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-@router.post("/upload", response_model=CandidateResponse, status_code=201)
+@router.post("/upload", response_model=CandidateResponse, status_code=202)
 def upload_resume(
     file: UploadFile = File(...),
     tenant_id: UUID = Depends(require_api_key),
     db: Session = Depends(get_db),
 ):
+    """Returns immediately with a `pending` candidate - no LLM call in this
+    request. Poll GET /candidates/{id} for `status` to see when parsing
+    (done asynchronously by app.worker) has finished."""
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
 
     file_bytes = file.file.read()
-    try:
-        return candidate_service.create_candidate_from_pdf(db, tenant_id, file_bytes)
-    except ResumeContentError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except ResumeParserUnavailableError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except VectorIndexingError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return candidate_service.enqueue_resume_upload(db, tenant_id, file_bytes)
 
 
 @router.get("/", response_model=list[CandidateResponse])

@@ -45,13 +45,14 @@ class CandidateResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    full_name: str
+    full_name: str | None
     email: str | None
     phone: str | None
     summary: str | None
     skills: list
     experience: list
     education: list
+    status: str
     created_at: datetime
 
 

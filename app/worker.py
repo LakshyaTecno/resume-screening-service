@@ -1,10 +1,14 @@
 """SQS-driven ingestion worker.
 
-Consumes `resume-uploaded` events published directly to SQS, downloads the
-source PDF from S3, and reuses the existing HTTP-upload pipeline
-(`candidate_service.create_candidate_from_pdf`) to parse, store, and embed
-the resume. Reports status back to DynamoDB, which feeds the existing
-(unowned by this service) DynamoDB-stream notification loop.
+Consumer half of the async upload path this service owns end-to-end:
+POST /candidates/upload (app/routers/candidates.py) creates a placeholder
+Candidate row and publishes the `resume-uploaded` message this worker
+consumes (see app/services/ingestion.py for the producer side). This
+worker downloads the source PDF from S3, parses it, and updates the
+existing placeholder row in place - it does not insert a new row, since
+the row's id was already handed to the client for polling at upload time.
+Reports status back to DynamoDB, which feeds the existing (unowned by this
+service) DynamoDB-stream notification loop.
 
 Run with: python -m app.worker
 """
@@ -45,12 +49,10 @@ PROCESSING_DURATION = Histogram(
 
 
 def _mark_status(candidate_id: str, status: str) -> None:
-    """Write the processing status Service A's stream-and-notify loop watches for.
-
-    Keyed by the external candidate_id from the SQS event, not this service's
-    internal Postgres primary key — downstream consumers of the notification
-    loop only know about the id Service A assigned at upload time.
-    """
+    """Write the processing status the downstream DynamoDB-stream notifier
+    watches for. Keyed by this service's own Postgres candidate id - the
+    same id returned to the client by POST /candidates/upload, since this
+    service now owns both the producer and consumer side of the queue."""
     table = dynamodb.Table(settings.dynamodb_table_name)
     table.update_item(
         Key={"candidate_id": candidate_id},
@@ -75,7 +77,9 @@ def _process_message(body: dict) -> None:
 
     db = SessionLocal()
     try:
-        candidate_service.create_candidate_from_pdf(db, UUID(tenant_id), file_bytes)
+        candidate_service.process_pending_candidate(
+            db, UUID(tenant_id), UUID(candidate_id), file_bytes
+        )
     finally:
         db.close()
 

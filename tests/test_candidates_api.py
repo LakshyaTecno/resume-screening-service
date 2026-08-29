@@ -1,7 +1,6 @@
 from uuid import uuid4
 
 from app.services import candidate_service
-from tests.factories import make_parsed_resume
 
 
 def test_create_candidate_happy_path(client, mock_vector_store):
@@ -22,13 +21,18 @@ def test_create_candidate_happy_path(client, mock_vector_store):
     body = response.json()
     assert body["full_name"] == "Jane Doe"
     assert body["email"] == "jane.doe@example.com"
+    assert body["status"] == "processed"
     assert "id" in body
 
 
-def test_upload_candidate_happy_path(client, mock_vector_store, monkeypatch):
-    parsed = make_parsed_resume(full_name="Uploaded Candidate")
+def test_upload_candidate_returns_202_pending(client, mock_vector_store, monkeypatch):
+    """Upload no longer parses inline - it enqueues and returns
+    immediately. Parsing is exercised separately in tests/test_upload.py
+    against candidate_service.process_pending_candidate directly."""
     monkeypatch.setattr(
-        candidate_service, "parse_resume_pdf", lambda file_bytes: (parsed, "raw resume text")
+        candidate_service.ingestion,
+        "upload_resume_and_enqueue",
+        lambda candidate_id, tenant_id, file_bytes: None,
     )
 
     response = client.post(
@@ -36,8 +40,10 @@ def test_upload_candidate_happy_path(client, mock_vector_store, monkeypatch):
         files={"file": ("resume.pdf", b"%PDF-1.4 fake bytes", "application/pdf")},
     )
 
-    assert response.status_code == 201
-    assert response.json()["full_name"] == "Uploaded Candidate"
+    assert response.status_code == 202
+    body = response.json()
+    assert body["status"] == "pending"
+    assert body["full_name"] is None
 
 
 def test_list_candidates_happy_path(client, mock_vector_store):
@@ -73,34 +79,6 @@ def test_upload_candidate_rejects_non_pdf_content_type(client):
     )
 
     assert response.status_code == 400
-
-
-def test_upload_candidate_unparseable_resume_returns_422(client, mock_vector_store, monkeypatch):
-    def raise_content_error(file_bytes):
-        raise ValueError("Could not extract text from PDF.")
-
-    monkeypatch.setattr(candidate_service, "parse_resume_pdf", raise_content_error)
-
-    response = client.post(
-        "/api/v1/candidates/upload",
-        files={"file": ("resume.pdf", b"%PDF-1.4 fake bytes", "application/pdf")},
-    )
-
-    assert response.status_code == 422
-
-
-def test_upload_candidate_llm_unavailable_returns_503(client, mock_vector_store, monkeypatch):
-    def raise_llm_down(file_bytes):
-        raise RuntimeError("connection refused")
-
-    monkeypatch.setattr(candidate_service, "parse_resume_pdf", raise_llm_down)
-
-    response = client.post(
-        "/api/v1/candidates/upload",
-        files={"file": ("resume.pdf", b"%PDF-1.4 fake bytes", "application/pdf")},
-    )
-
-    assert response.status_code == 503
 
 
 def test_create_candidate_vector_indexing_error_returns_502(client, mock_vector_store):

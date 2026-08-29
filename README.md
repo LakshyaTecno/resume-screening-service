@@ -4,54 +4,66 @@ AI microservice (FastAPI) for a recruitment platform — resume parsing, candida
 
 ## Architecture
 
-Two independent pipelines. Resumes never arrive over this service's own API.
+Two pipelines, both now owned end-to-end by this service.
 
-### 1. Ingestion pipeline — resume parsing
+### 1. Ingestion pipeline — resume upload & parsing
 
-Event-driven, not API-driven. An upstream service publishes a
-`resume-uploaded` event directly to an SQS queue — no SNS topic in front of
-it, since fan-out to multiple consumers only pays off if there's more than
-one, and this service is the only consumer. This service's worker
-(`app/worker.py`) consumes it, parses the PDF via Ollama, stores it in
-PostgreSQL, and embeds it in Pinecone. See
+`POST /api/v1/candidates/upload` (`app/routers/candidates.py`) is the
+producer: it creates a `pending` `Candidate` row, uploads the raw PDF to
+S3, and publishes a `resume-uploaded` message to SQS
+(`app/services/ingestion.py`) — no SNS topic in front of it, since fan-out
+to multiple consumers only pays off if there's more than one, and this
+service is the only consumer. It returns immediately (202) with the
+candidate's id; there's no LLM call in that request.
+
+This service's own worker (`app/worker.py`) is the consumer: it reads the
+message, downloads the PDF from S3, parses it via Ollama, and updates the
+*same* `Candidate` row in place (`pending` → `processing` → `processed`,
+or `failed` on a permanent parse error), then embeds it in Pinecone. A
+client polls `GET /api/v1/candidates/{id}` and watches `status` to know
+when it's done. See
 [docs/terraform-sqs-explained.md](docs/terraform-sqs-explained.md) for why
 this uses plain SQS, not SNS fan-out.
 
 ```mermaid
 flowchart TD
-    S3[(S3: resume upload)] --> SQS[SQS: resume-uploaded]
+    Upload["POST /candidates/upload"] --> S3[(S3: resume upload)]
+    Upload --> PGPending[(PostgreSQL: status=pending)]
+    S3 --> SQS[SQS: resume-uploaded]
     SQS --> Worker[app/worker.py]
     Worker --> Parser["Resume Parser (Ollama)"]
-    Parser --> PG[(PostgreSQL)]
+    Parser --> PG[(PostgreSQL: status=processed)]
     Parser --> Embed["Embeddings (Ollama)"]
     Embed --> PC[(Pinecone)]
     PG --> DDB[(DynamoDB status)]
     DDB --> Lambda[Notifier Lambda]
 ```
 
-Run it locally with:
+Run the worker locally with:
 
 ```bash
 python -m app.worker
 ```
 
 Needs `SQS_QUEUE_URL`, `S3_BUCKET_NAME`, `DYNAMODB_TABLE_NAME`, and
-`AWS_REGION` set (see `.env.example`). A successful parse writes
-`status: ai-processed` to DynamoDB for a downstream notification loop.
+`AWS_REGION` set (see `.env.example`) — the same variables the upload
+endpoint reads, since this service is now both producer and consumer of
+its own queue.
 
 ### 2. Screening pipeline — matching & ranking
 
-API-driven — the two endpoints this service exposes:
+API-driven:
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/api/v1/jobs/` | Create job posting → embed |
+| `POST` | `/api/v1/candidates/upload` | Enqueue a resume for async parsing (202, `status: pending`) |
+| `GET` | `/api/v1/candidates/{id}` | Poll parsing status / fetch a parsed candidate |
 | `POST` | `/api/v1/screening/rank` | Hybrid rank candidates for a job |
 
-Plus `GET /health` for liveness/readiness checks. (A few other routes —
-`GET /api/v1/jobs/`, candidate CRUD under `/api/v1/candidates/` — still
-exist in the code for manual/dev testing, but aren't part of the intended
-two-pipeline architecture and aren't documented as a stable public API.)
+Plus `GET /health` for liveness/readiness checks. (`GET /api/v1/jobs/` and
+the JSON-body `POST /api/v1/candidates/` still exist for manual/dev
+testing, but aren't documented as a stable public API.)
 
 ```mermaid
 flowchart LR

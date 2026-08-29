@@ -47,7 +47,11 @@ class Candidate(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    full_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Nullable: a candidate created by the async upload path (see
+    # candidate_service.enqueue_resume_upload) starts as a placeholder row
+    # with no parsed fields yet - full_name is genuinely unknown, not
+    # merely a transient placeholder, until the worker parses it.
+    full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -56,6 +60,13 @@ class Candidate(Base):
     education: Mapped[list] = mapped_column(JSONB, default=list)
     raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     pinecone_id: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
+    # pending -> processing -> processed, or -> failed on a permanent parse
+    # error. Defaults to "processed" so the synchronous JSON-create path
+    # (create_candidate) needs no special-casing - only the async upload
+    # path explicitly sets "pending".
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="processed", server_default="processed"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
