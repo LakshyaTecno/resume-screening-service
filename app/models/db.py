@@ -96,6 +96,49 @@ class Job(Base):
     matches: Mapped[list["MatchResult"]] = relationship(back_populates="job")
 
 
+class Plan(Base):
+    __tablename__ = "plans"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    # Smallest currency unit (paise, not rupees) - matches Razorpay's own
+    # convention and avoids float rounding on money.
+    price: Mapped[int] = mapped_column(nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="INR")
+    monthly_resume_quota: Mapped[int | None] = mapped_column(nullable=True)  # None = unlimited
+    razorpay_plan_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Subscription(Base):
+    __tablename__ = "subscriptions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # One current subscription per tenant, not a history table - a plan
+    # change updates this row rather than creating a second one.
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    plan_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("plans.id"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="created")
+    razorpay_subscription_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    current_period_end: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    tenant: Mapped["Tenant"] = relationship()
+    plan: Mapped["Plan"] = relationship()
+
+
 class MatchResult(Base):
     __tablename__ = "match_results"
 

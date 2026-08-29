@@ -96,6 +96,16 @@ class RankedCandidate(BaseModel):
     gaps: list[str] = Field(default_factory=list)
 
 
+class SubscribeRequest(BaseModel):
+    plan_id: UUID
+
+
+class SubscribeResponse(BaseModel):
+    subscription_id: UUID
+    status: str
+    checkout_url: str
+
+
 class ScreeningRequest(BaseModel):
     job_id: UUID
     top_k: int | None = None

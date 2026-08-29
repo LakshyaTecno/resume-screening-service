@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     dynamodb_table_name: str = "resume-processing-status"
     worker_metrics_port: int = Field(default=9100, gt=0)
 
+    # Razorpay billing (app/services/billing_service.py, app/routers/billing.py)
+    razorpay_key_id: str = ""
+    razorpay_key_secret: str = ""
+    razorpay_webhook_secret: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

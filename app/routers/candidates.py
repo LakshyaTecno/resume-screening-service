@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.auth import require_api_key
+from app.billing_guard import enforce_quota
 from app.database import get_db
 from app.exceptions import ResourceNotFoundError, VectorIndexingError
 from app.models.schemas import CandidateCreate, CandidateResponse
@@ -27,7 +28,7 @@ def create_candidate(
 @router.post("/upload", response_model=CandidateResponse, status_code=202)
 def upload_resume(
     file: UploadFile = File(...),
-    tenant_id: UUID = Depends(require_api_key),
+    tenant_id: UUID = Depends(enforce_quota),
     db: Session = Depends(get_db),
 ):
     """Returns immediately with a `pending` candidate - no LLM call in this

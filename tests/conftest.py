@@ -10,6 +10,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.auth import require_api_key
+from app.billing_guard import enforce_quota
 from app.database import Base, get_db
 from app.main import app
 from app.models.db import Tenant
@@ -84,22 +85,25 @@ def client(db_session: Session, tenant: Tenant) -> Generator[TestClient, None, N
     app.database.engine (the *dev* DATABASE_URL), not the test DB. Schema
     setup here is fully owned by _test_schema.
 
-    Auth is bypassed (not exercised) here so the ~26 functional tests using
-    this fixture don't all need a real API key threaded through them just
-    to reach the behavior they're actually testing - see test_auth.py for
-    tests of the auth dependency itself, which use `authenticated_client`
-    instead."""
+    Auth and billing-quota enforcement are both bypassed (not exercised)
+    here so the functional tests using this fixture don't all need a real
+    API key or an active subscription threaded through them just to reach
+    the behavior they're actually testing - see test_auth.py and
+    test_billing.py for tests of those dependencies directly, which use
+    `authenticated_client` instead."""
 
     def _get_db_override():
         yield db_session
 
     app.dependency_overrides[get_db] = _get_db_override
     app.dependency_overrides[require_api_key] = lambda: tenant.id
+    app.dependency_overrides[enforce_quota] = lambda: tenant.id
     try:
         yield TestClient(app)
     finally:
         app.dependency_overrides.pop(get_db, None)
         app.dependency_overrides.pop(require_api_key, None)
+        app.dependency_overrides.pop(enforce_quota, None)
 
 
 @pytest.fixture

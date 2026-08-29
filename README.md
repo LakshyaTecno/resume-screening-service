@@ -123,6 +123,33 @@ revoked key are all indistinguishable to a caller - every one of them is a
 Tenant and API-key management has no dedicated endpoint yet in this
 service - see the admin API work tracked for that.
 
+## Billing
+
+Razorpay-backed subscriptions gate the resume-consuming endpoints:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/v1/billing/subscribe` | Create/replace a tenant's subscription to a plan, returns a Razorpay-hosted checkout URL |
+| `POST` | `/api/v1/billing/webhook` | Razorpay calls this directly - not tenant-key-authenticated, verified by `X-Razorpay-Signature` instead |
+
+`POST /api/v1/candidates/upload` is gated by
+[`app/billing_guard.py`](app/billing_guard.py)'s `enforce_quota` dependency
+in place of plain `require_api_key`: no active subscription, or a plan's
+`monthly_resume_quota` already used up, both return `402 Payment Required`.
+Quota is counted live from `candidates` rows created in the current
+billing period, not a separate running counter - always correct by
+construction, no risk of drifting out of sync with reality if a webhook
+is ever missed.
+
+One subscription per tenant (`subscriptions.tenant_id` is unique) - not a
+history table. Changing plans updates the existing row.
+
+There's no live Razorpay account behind this yet - that's a signup only
+you can do, in your own Razorpay dashboard. Tests
+([`tests/test_billing.py`](tests/test_billing.py)) exercise the whole flow
+against a mocked Razorpay client and a locally-computed webhook signature,
+which needs no live account.
+
 ## Features
 
 | Module | Description |
@@ -261,7 +288,9 @@ already excluded by `.gitignore`. The example file is safe to commit.
 | `VECTOR_TOP_K` | No | Candidates retrieved by vector similarity (default `20`) |
 | `RANKING_TOP_N` | No | Final candidates returned after LLM ranking (default `5`) |
 | `RANKING_CONCURRENCY` | No | Candidate LLM evaluations run concurrently per `/screening/rank` call (default `5`) — only actually parallelizes if Ollama's `OLLAMA_NUM_PARALLEL` (set on the Ollama server/container, not this app) is at least this high; otherwise Ollama just queues the extra requests |
-| `AWS_REGION`, `SQS_QUEUE_URL`, `S3_BUCKET_NAME`, `DYNAMODB_TABLE_NAME` | Only for the worker | Real AWS resources the ingestion pipeline consumes — see `infra/terraform/` |
+| `AWS_REGION`, `SQS_QUEUE_URL`, `S3_BUCKET_NAME`, `DYNAMODB_TABLE_NAME` | Yes, for upload/worker | Real AWS resources the ingestion pipeline consumes — see `infra/terraform/`. Used by both the upload endpoint (producer) and the worker (consumer) |
+| `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` | Yes, for billing | From your Razorpay dashboard — see [Billing](#billing) |
+| `RAZORPAY_WEBHOOK_SECRET` | Yes, for billing | From your Razorpay webhook config; verifies `POST /billing/webhook` actually came from Razorpay |
 
 Note: outside Docker, `127.0.0.1:5433`/`127.0.0.1:11435` (the values in
 `.env.example`) reach Postgres/Ollama through their Compose port mappings.
