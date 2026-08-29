@@ -3,12 +3,13 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.auth import require_api_key
 from app.database import get_db
 from app.exceptions import ResourceNotFoundError, VectorIndexingError
 from app.models.schemas import JobCreate, JobResponse
 from app.services import job_service
 
-router = APIRouter(prefix="/jobs", tags=["jobs"])
+router = APIRouter(prefix="/jobs", tags=["jobs"], dependencies=[Depends(require_api_key)])
 
 
 @router.post("/", response_model=JobResponse, status_code=201)

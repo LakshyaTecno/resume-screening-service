@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     ollama_num_ctx: int = Field(default=2048, gt=0)
     ollama_num_predict: int = Field(default=512, gt=0)
 
+    # Shared secret required on every /api/v1/* request via the X-API-Key
+    # header (see app/auth.py). Empty by default - deployments must set
+    # this explicitly, since the auth dependency fails closed when it's blank.
+    api_key: str = ""
+
     pinecone_api_key: str = ""
     pinecone_index_name: str = "resume-screening-nomic-768"
     pinecone_cloud: str = "aws"
@@ -25,6 +30,10 @@ class Settings(BaseSettings):
 
     vector_top_k: int = Field(default=20, gt=0)
     ranking_top_n: int = Field(default=5, gt=0)
+    # How many candidates' LLM evaluations run concurrently per /screening/rank
+    # call. Only helps if Ollama is actually configured to process that many
+    # requests in parallel - see OLLAMA_NUM_PARALLEL in the README.
+    ranking_concurrency: int = Field(default=5, gt=0)
 
     # Event-driven ingestion worker (app/worker.py)
     aws_region: str = "us-east-1"

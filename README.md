@@ -61,10 +61,15 @@ flowchart LR
     LLM2 -->|Rank + Explain| Results["POST /screening/rank response"]
 ```
 
+Every `/api/v1/*` request needs an `X-API-Key` header matching `API_KEY`
+(see [Authentication](#authentication) below) - `/health` and `/metrics`
+are the only routes that don't.
+
 ```bash
 # 1. Create a job posting
 curl -X POST http://localhost:8000/api/v1/jobs/ \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
   -d '{
     "title": "Senior Python Developer",
     "company": "Acme Corp",
@@ -76,8 +81,27 @@ curl -X POST http://localhost:8000/api/v1/jobs/ \
 # 2. Rank candidates for the job
 curl -X POST http://localhost:8000/api/v1/screening/rank \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
   -d '{"job_id": "<job-uuid>", "top_k": 20, "top_n": 5}'
 ```
+
+## Authentication
+
+Every route under `/api/v1/` (jobs, candidates, screening) requires a
+matching `X-API-Key` header, enforced per-router via
+[`app/auth.py`](app/auth.py)'s `require_api_key` dependency. `GET /health`
+and `GET /metrics` are intentionally exempt - Docker's healthcheck and a
+Prometheus scrape config would otherwise need the secret too.
+
+This is a single shared key, not per-customer credentials - it stops an
+open endpoint from being callable by anyone who finds the URL, but it does
+not give you multi-tenancy (all callers share one pool of jobs/candidates).
+Scoping data per customer is a separate, larger change, not something
+`API_KEY` provides on its own.
+
+**Fails closed**: if `API_KEY` isn't set, every `/api/v1/*` request gets a
+503, not free access - a deployment that forgot to configure it is
+obviously broken instead of silently open.
 
 ## Features
 
@@ -86,6 +110,99 @@ curl -X POST http://localhost:8000/api/v1/screening/rank \
 | **Resume Parsing** | PDF loader + LLM structured output (Pydantic) into PostgreSQL |
 | **Candidate–Job Matching** | Resume/job embeddings in Pinecone, matched via cosine similarity |
 | **Resume Ranking** | Hybrid retrieval — vector search narrows to top-K, then LLM ranks the shortlist |
+
+## AI techniques used
+
+**Type of AI**: locally-hosted, open-weight LLMs via [Ollama](https://ollama.com/)
+— `llama3.2:3b` for language tasks, `nomic-embed-text` for embeddings — not a
+hosted API like OpenAI or Anthropic. The whole pipeline runs on a laptop, no
+per-token cost, no data leaving the machine.
+
+**This is not agentic AI**, and that's a deliberate distinction, not an
+omission. Nothing here autonomously plans multi-step actions, decides which
+tool to call, or runs in a reasoning loop (no LangGraph, no `AgentExecutor`,
+no tool-calling). Every LLM call is a single, direct request: parse this
+text, score this candidate. What's actually implemented:
+
+1. **Structured output extraction** (`app/services/resume_parser.py`) —
+   LangChain's `with_structured_output` forces the LLM's response into a
+   strict Pydantic schema (`ParsedResume`), turning freeform resume text
+   into valid, typed JSON reliably, not just "usually."
+2. **RAG-style hybrid retrieval + LLM re-ranking** (`app/services/ranking.py`,
+   `matching.py`) — Pinecone vector search narrows a job's candidate pool to
+   the top-K by cosine similarity (cheap), then the LLM evaluates each
+   shortlisted candidate individually — structured score, strengths, gaps,
+   summary — and results are re-sorted by that score (expensive, but only
+   on the shortlist). Retrieve cheap, reason expensive on the narrowed set —
+   a standard, real production RAG pattern.
+3. **Prompting a small local model reliably** — `llama3.2:3b` initially
+   dropped the summary/experience-description fields during extraction even
+   when present in the source text; fixed by making the prompt explicitly
+   call out fields the model tends to skip. A concrete, real example of the
+   gap between "a bigger hosted model would probably just get this right"
+   and what it actually takes to get consistent structured output from a
+   small local one.
+4. **Concurrent ranking, not sequential** (`app/services/ranking.py`) — the
+   per-candidate LLM call in `rank_candidates_for_job()` used to run one
+   candidate at a time, so ranking the default `top_k=20` shortlist meant 20
+   back-to-back local-model generations before a response went out. Local
+   open-weight models trade per-token cost for raw speed, and a synchronous
+   API endpoint can't hide that latency the way the event-driven ingestion
+   pipeline already does. Candidates are now evaluated with a
+   `ThreadPoolExecutor` (`RANKING_CONCURRENCY`, default `5`), while the
+   SQLAlchemy session itself stays single-threaded — only the DB-free LLM
+   calls run in parallel. This only pays off if Ollama is actually
+   configured to process that many requests at once (`OLLAMA_NUM_PARALLEL`
+   on the Ollama server); otherwise it just queues them at the same total
+   cost, same total time.
+
+## Embeddings and vector search (Pinecone)
+
+**Model**: `nomic-embed-text` via Ollama — 768-dimensional embeddings,
+generated locally, no external embedding API. The Pinecone index name
+(`resume-screening-nomic-768`) bakes in the dimension on purpose, as a
+reminder that an index is permanently tied to one embedding
+dimension/model.
+
+**What actually gets embedded** — not raw PDF text. `build_candidate_embed_text()`
+/ `build_job_embed_text()` (`app/services/ranking.py`) assemble a plain-text
+summary from the already-*parsed*, structured fields first (name, summary,
+skills, each job's title/company/description, education) — the vector
+reflects clean structured data, not noisy raw resume text.
+
+**Index management** (`app/services/embeddings.py`, `VectorStore`):
+- Lazily initialized — the Pinecone client and index handle are only
+  created on first real use, not at import time.
+- **Self-sizing index creation**: if the configured index doesn't exist
+  yet, it's created automatically with `metric="cosine"` on Pinecone
+  Serverless — and its dimension isn't hardcoded, it's measured by
+  actually embedding a probe string first. That avoids a real class of
+  bug: an index created with the wrong dimension for whatever embedding
+  model is actually configured.
+
+**Candidates and jobs share one index**, distinguished by metadata rather
+than separate Pinecone indexes or namespaces:
+- Vector IDs: `candidate-{uuid}` / `job-{uuid}`
+- Metadata carries `type: "candidate" | "job"`
+- `query_similar_candidates()` explicitly filters on `type: candidate`, so
+  a job's query never accidentally matches against other jobs even though
+  they live in the same index.
+
+**Where it's used**:
+1. **On creation** — every candidate (`candidate_service.py`) and job
+   (`job_service.py`) gets embedded and upserted immediately, in the same
+   flow as the database write; a Pinecone failure rolls back the
+   Postgres write too (`VectorIndexingError`), so the two never drift out
+   of sync.
+2. **On screening** (`ranking.py` `rank_candidates_for_job`) — the job's
+   text is embedded once and used as the query vector; Pinecone's top-K
+   nearest neighbors (cosine similarity) become the shortlist the LLM then
+   re-ranks — the hybrid retrieval pattern described above.
+
+**Verified against a real index, not a mock**: `describe_index_stats()`
+returned `dimension=768, metric='cosine'`, and every Postgres candidate row
+with a `pinecone_id` set had exactly one matching real vector — confirmed
+by cross-referencing the two directly, not assumed.
 
 ## Prerequisites
 
@@ -110,6 +227,7 @@ already excluded by `.gitignore`. The example file is safe to commit.
 |----------|-----------|---------|
 | `APP_NAME` | No | Name displayed in the generated FastAPI documentation |
 | `DEBUG` | No | Local-development debug flag |
+| `API_KEY` | Yes | Shared secret required on every `/api/v1/*` request via the `X-API-Key` header — see [Authentication](#authentication) |
 | `DATABASE_URL` | Yes | SQLAlchemy connection URL for PostgreSQL |
 | `OLLAMA_BASE_URL` | Yes | Address of the Ollama server |
 | `OLLAMA_LLM_MODEL` | Yes | Chat model used to parse and evaluate resumes |
@@ -122,6 +240,7 @@ already excluded by `.gitignore`. The example file is safe to commit.
 | `PINECONE_REGION` | Yes for a new index | Pinecone serverless region |
 | `VECTOR_TOP_K` | No | Candidates retrieved by vector similarity (default `20`) |
 | `RANKING_TOP_N` | No | Final candidates returned after LLM ranking (default `5`) |
+| `RANKING_CONCURRENCY` | No | Candidate LLM evaluations run concurrently per `/screening/rank` call (default `5`) — only actually parallelizes if Ollama's `OLLAMA_NUM_PARALLEL` (set on the Ollama server/container, not this app) is at least this high; otherwise Ollama just queues the extra requests |
 | `AWS_REGION`, `SQS_QUEUE_URL`, `S3_BUCKET_NAME`, `DYNAMODB_TABLE_NAME` | Only for the worker | Real AWS resources the ingestion pipeline consumes — see `infra/terraform/` |
 
 Note: outside Docker, `127.0.0.1:5433`/`127.0.0.1:11435` (the values in

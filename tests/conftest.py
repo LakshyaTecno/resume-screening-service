@@ -9,6 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.auth import require_api_key
 from app.database import Base, get_db
 from app.main import app
 
@@ -65,10 +66,34 @@ def db_session(session_factory: sessionmaker) -> Generator[Session, None, None]:
 
 @pytest.fixture
 def client(db_session: Session) -> Generator[TestClient, None, None]:
-    """TestClient with get_db overridden. Deliberately NOT `with TestClient
-    (app) as c:` - entering that context runs app.main's lifespan, which
-    calls init_db() against app.database.engine (the *dev* DATABASE_URL),
-    not the test DB. Schema setup here is fully owned by _test_schema."""
+    """TestClient with get_db and the API-key auth both overridden.
+    Deliberately NOT `with TestClient(app) as c:` - entering that context
+    runs app.main's lifespan, which calls init_db() against
+    app.database.engine (the *dev* DATABASE_URL), not the test DB. Schema
+    setup here is fully owned by _test_schema.
+
+    Auth is bypassed here so the ~26 functional tests using this fixture
+    don't all need a header threaded through them just to reach the
+    behavior they're actually testing - see test_auth.py for tests of the
+    auth dependency itself, which use `authenticated_client` instead."""
+
+    def _get_db_override():
+        yield db_session
+
+    app.dependency_overrides[get_db] = _get_db_override
+    app.dependency_overrides[require_api_key] = lambda: None
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(require_api_key, None)
+
+
+@pytest.fixture
+def authenticated_client(db_session: Session) -> Generator[TestClient, None, None]:
+    """TestClient with only get_db overridden - the real require_api_key
+    dependency runs, so tests using this fixture exercise actual auth
+    enforcement (see test_auth.py)."""
 
     def _get_db_override():
         yield db_session

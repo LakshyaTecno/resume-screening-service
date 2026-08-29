@@ -3,13 +3,14 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.auth import require_api_key
 from app.database import get_db
 from app.exceptions import ResourceNotFoundError
 from app.models.schemas import ScreeningRequest, ScreeningResponse
 from app.services import job_service
 from app.services.ranking import rank_candidates_for_job
 
-router = APIRouter(prefix="/screening", tags=["screening"])
+router = APIRouter(prefix="/screening", tags=["screening"], dependencies=[Depends(require_api_key)])
 
 
 @router.post("/rank", response_model=ScreeningResponse)

@@ -3,6 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
+from app.auth import require_api_key
 from app.database import get_db
 from app.exceptions import (
     ResourceNotFoundError,
@@ -13,7 +14,9 @@ from app.exceptions import (
 from app.models.schemas import CandidateCreate, CandidateResponse
 from app.services import candidate_service
 
-router = APIRouter(prefix="/candidates", tags=["candidates"])
+router = APIRouter(
+    prefix="/candidates", tags=["candidates"], dependencies=[Depends(require_api_key)]
+)
 
 
 @router.post("/", response_model=CandidateResponse, status_code=201)
