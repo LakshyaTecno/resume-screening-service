@@ -12,6 +12,7 @@ Run with: python -m app.worker
 import json
 import logging
 from datetime import datetime, timezone
+from uuid import UUID
 
 import boto3
 from prometheus_client import Counter, Histogram, start_http_server
@@ -64,6 +65,7 @@ def _mark_status(candidate_id: str, status: str) -> None:
 
 def _process_message(body: dict) -> None:
     candidate_id = body["candidate_id"]
+    tenant_id = body["tenant_id"]
     bucket = body["s3_bucket"]
     key = body["s3_key"]
 
@@ -73,7 +75,7 @@ def _process_message(body: dict) -> None:
 
     db = SessionLocal()
     try:
-        candidate_service.create_candidate_from_pdf(db, file_bytes)
+        candidate_service.create_candidate_from_pdf(db, UUID(tenant_id), file_bytes)
     finally:
         db.close()
 

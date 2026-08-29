@@ -61,9 +61,11 @@ flowchart LR
     LLM2 -->|Rank + Explain| Results["POST /screening/rank response"]
 ```
 
-Every `/api/v1/*` request needs an `X-API-Key` header matching `API_KEY`
-(see [Authentication](#authentication) below) - `/health` and `/metrics`
-are the only routes that don't.
+Every `/api/v1/*` request needs an `X-API-Key` header for a real,
+non-revoked key (see [Authentication and multi-tenancy](#authentication-and-multi-tenancy)
+below) - `/health` and `/metrics` are the only routes that don't. There's
+no tenant/key-creation endpoint yet, so `$API_KEY` below stands in for a
+key you've inserted directly into the `api_keys` table for now.
 
 ```bash
 # 1. Create a job posting
@@ -85,23 +87,29 @@ curl -X POST http://localhost:8000/api/v1/screening/rank \
   -d '{"job_id": "<job-uuid>", "top_k": 20, "top_n": 5}'
 ```
 
-## Authentication
+## Authentication and multi-tenancy
 
 Every route under `/api/v1/` (jobs, candidates, screening) requires a
-matching `X-API-Key` header, enforced per-router via
-[`app/auth.py`](app/auth.py)'s `require_api_key` dependency. `GET /health`
-and `GET /metrics` are intentionally exempt - Docker's healthcheck and a
-Prometheus scrape config would otherwise need the secret too.
+matching `X-API-Key` header, resolved to a `tenant_id` by
+[`app/auth.py`](app/auth.py)'s `require_api_key` dependency - every handler
+receives that `tenant_id` and every query is scoped by it, so one tenant's
+jobs/candidates are invisible to every other tenant (see
+[`tests/test_tenancy.py`](tests/test_tenancy.py)). `GET /health` and
+`GET /metrics` are intentionally exempt - Docker's healthcheck and a
+Prometheus scrape config would otherwise need a key too.
 
-This is a single shared key, not per-customer credentials - it stops an
-open endpoint from being callable by anyone who finds the URL, but it does
-not give you multi-tenancy (all callers share one pool of jobs/candidates).
-Scoping data per customer is a separate, larger change, not something
-`API_KEY` provides on its own.
+**Keys, not passwords**: only a SHA-256 hash of each key is stored
+(`api_keys.hashed_key`) - the raw key is shown exactly once, at creation,
+and is never retrievable again. There's no shared/global key anymore; every
+tenant has their own, and revoking one (`api_keys.revoked_at`) doesn't
+affect any other tenant.
 
-**Fails closed**: if `API_KEY` isn't set, every `/api/v1/*` request gets a
-503, not free access - a deployment that forgot to configure it is
-obviously broken instead of silently open.
+**Fails closed**: an empty `api_keys` table, an unrecognized key, or a
+revoked key are all indistinguishable to a caller - every one of them is a
+401. There's no "unconfigured" state that falls open.
+
+Tenant and API-key management has no dedicated endpoint yet in this
+service - see the admin API work tracked for that.
 
 ## Features
 
@@ -227,7 +235,7 @@ already excluded by `.gitignore`. The example file is safe to commit.
 |----------|-----------|---------|
 | `APP_NAME` | No | Name displayed in the generated FastAPI documentation |
 | `DEBUG` | No | Local-development debug flag |
-| `API_KEY` | Yes | Shared secret required on every `/api/v1/*` request via the `X-API-Key` header — see [Authentication](#authentication) |
+| — | | Per-tenant API keys are stored in the `api_keys` table, not an env var — see [Authentication and multi-tenancy](#authentication-and-multi-tenancy) |
 | `DATABASE_URL` | Yes | SQLAlchemy connection URL for PostgreSQL |
 | `OLLAMA_BASE_URL` | Yes | Address of the Ollama server |
 | `OLLAMA_LLM_MODEL` | Yes | Chat model used to parse and evaluate resumes |

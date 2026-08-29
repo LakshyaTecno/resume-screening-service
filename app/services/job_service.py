@@ -10,8 +10,9 @@ from app.services.embeddings import vector_store
 from app.services.ranking import build_job_embed_text
 
 
-def create_job(db: Session, payload: JobCreate) -> Job:
+def create_job(db: Session, tenant_id: UUID, payload: JobCreate) -> Job:
     job = Job(
+        tenant_id=tenant_id,
         title=payload.title,
         company=payload.company,
         description=payload.description,
@@ -25,6 +26,7 @@ def create_job(db: Session, payload: JobCreate) -> Job:
             job_id=str(job.id),
             text=build_job_embed_text(job),
             metadata={"title": job.title, "company": job.company or ""},
+            namespace=str(tenant_id),
         )
         db.commit()
         db.refresh(job)
@@ -36,12 +38,12 @@ def create_job(db: Session, payload: JobCreate) -> Job:
         ) from exc
 
 
-def list_jobs(db: Session) -> list[Job]:
-    return job_repository.list_all(db)
+def list_jobs(db: Session, tenant_id: UUID) -> list[Job]:
+    return job_repository.list_all(db, tenant_id)
 
 
-def get_job(db: Session, job_id: UUID) -> Job:
-    job = job_repository.get_by_id(db, job_id)
+def get_job(db: Session, tenant_id: UUID, job_id: UUID) -> Job:
+    job = job_repository.get_by_id(db, tenant_id, job_id)
     if job is None:
         raise ResourceNotFoundError("Job not found")
     return job

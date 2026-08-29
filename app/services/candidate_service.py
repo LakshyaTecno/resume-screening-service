@@ -16,8 +16,9 @@ from app.services.ranking import build_candidate_embed_text
 from app.services.resume_parser import parse_resume_pdf
 
 
-def create_candidate(db: Session, payload: CandidateCreate) -> Candidate:
+def create_candidate(db: Session, tenant_id: UUID, payload: CandidateCreate) -> Candidate:
     candidate = Candidate(
+        tenant_id=tenant_id,
         full_name=payload.full_name,
         email=payload.email,
         phone=payload.phone,
@@ -27,10 +28,10 @@ def create_candidate(db: Session, payload: CandidateCreate) -> Candidate:
         education=[entry.model_dump() for entry in payload.education],
         raw_text=payload.raw_text,
     )
-    return _save_and_index(db, candidate)
+    return _save_and_index(db, tenant_id, candidate)
 
 
-def create_candidate_from_pdf(db: Session, file_bytes: bytes) -> Candidate:
+def create_candidate_from_pdf(db: Session, tenant_id: UUID, file_bytes: bytes) -> Candidate:
     try:
         parsed, raw_text = parse_resume_pdf(file_bytes)
     except ValueError as exc:
@@ -41,23 +42,26 @@ def create_candidate_from_pdf(db: Session, file_bytes: bytes) -> Candidate:
             "OLLAMA_LLM_MODEL is installed."
         ) from exc
 
-    candidate = _candidate_from_parsed_resume(parsed, raw_text)
-    return _save_and_index(db, candidate)
+    candidate = _candidate_from_parsed_resume(tenant_id, parsed, raw_text)
+    return _save_and_index(db, tenant_id, candidate)
 
 
-def list_candidates(db: Session) -> list[Candidate]:
-    return candidate_repository.list_all(db)
+def list_candidates(db: Session, tenant_id: UUID) -> list[Candidate]:
+    return candidate_repository.list_all(db, tenant_id)
 
 
-def get_candidate(db: Session, candidate_id: UUID) -> Candidate:
-    candidate = candidate_repository.get_by_id(db, candidate_id)
+def get_candidate(db: Session, tenant_id: UUID, candidate_id: UUID) -> Candidate:
+    candidate = candidate_repository.get_by_id(db, tenant_id, candidate_id)
     if candidate is None:
         raise ResourceNotFoundError("Candidate not found")
     return candidate
 
 
-def _candidate_from_parsed_resume(parsed: ParsedResume, raw_text: str) -> Candidate:
+def _candidate_from_parsed_resume(
+    tenant_id: UUID, parsed: ParsedResume, raw_text: str
+) -> Candidate:
     return Candidate(
+        tenant_id=tenant_id,
         full_name=parsed.full_name,
         email=str(parsed.email) if parsed.email else None,
         phone=parsed.phone,
@@ -69,13 +73,14 @@ def _candidate_from_parsed_resume(parsed: ParsedResume, raw_text: str) -> Candid
     )
 
 
-def _save_and_index(db: Session, candidate: Candidate) -> Candidate:
+def _save_and_index(db: Session, tenant_id: UUID, candidate: Candidate) -> Candidate:
     try:
         candidate_repository.add(db, candidate)
         candidate.pinecone_id = vector_store.upsert_candidate(
             candidate_id=str(candidate.id),
             text=build_candidate_embed_text(candidate),
             metadata={"full_name": candidate.full_name},
+            namespace=str(tenant_id),
         )
         db.commit()
         db.refresh(candidate)

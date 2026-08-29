@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.auth import require_api_key
 from app.database import Base, get_db
 from app.main import app
+from app.models.db import Tenant
 
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
@@ -65,23 +66,35 @@ def db_session(session_factory: sessionmaker) -> Generator[Session, None, None]:
 
 
 @pytest.fixture
-def client(db_session: Session) -> Generator[TestClient, None, None]:
-    """TestClient with get_db and the API-key auth both overridden.
-    Deliberately NOT `with TestClient(app) as c:` - entering that context
-    runs app.main's lifespan, which calls init_db() against
+def tenant(db_session: Session) -> Tenant:
+    """A real Tenant row - candidates/jobs have a NOT NULL FK to it, so
+    even tests that bypass auth need a real tenant_id to attach rows to."""
+    t = Tenant(name="Test Tenant")
+    db_session.add(t)
+    db_session.commit()
+    db_session.refresh(t)
+    return t
+
+
+@pytest.fixture
+def client(db_session: Session, tenant: Tenant) -> Generator[TestClient, None, None]:
+    """TestClient with get_db overridden and auth resolved to a fixed test
+    tenant. Deliberately NOT `with TestClient(app) as c:` - entering that
+    context runs app.main's lifespan, which calls init_db() against
     app.database.engine (the *dev* DATABASE_URL), not the test DB. Schema
     setup here is fully owned by _test_schema.
 
-    Auth is bypassed here so the ~26 functional tests using this fixture
-    don't all need a header threaded through them just to reach the
-    behavior they're actually testing - see test_auth.py for tests of the
-    auth dependency itself, which use `authenticated_client` instead."""
+    Auth is bypassed (not exercised) here so the ~26 functional tests using
+    this fixture don't all need a real API key threaded through them just
+    to reach the behavior they're actually testing - see test_auth.py for
+    tests of the auth dependency itself, which use `authenticated_client`
+    instead."""
 
     def _get_db_override():
         yield db_session
 
     app.dependency_overrides[get_db] = _get_db_override
-    app.dependency_overrides[require_api_key] = lambda: None
+    app.dependency_overrides[require_api_key] = lambda: tenant.id
     try:
         yield TestClient(app)
     finally:
@@ -127,16 +140,16 @@ def mock_vector_store(monkeypatch):
     monkeypatch.setattr(
         vector_store,
         "upsert_candidate",
-        lambda candidate_id, text, metadata: f"candidate-{candidate_id}",
+        lambda candidate_id, text, metadata, namespace: f"candidate-{candidate_id}",
     )
     monkeypatch.setattr(
         vector_store,
         "upsert_job",
-        lambda job_id, text, metadata: f"job-{job_id}",
+        lambda job_id, text, metadata, namespace: f"job-{job_id}",
     )
     monkeypatch.setattr(
         vector_store,
         "query_similar_candidates",
-        lambda job_text, top_k=20, job_id=None: [],
+        lambda job_text, namespace, top_k=20: [],
     )
     return vector_store

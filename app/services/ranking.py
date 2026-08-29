@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.models.db import Candidate, Job, MatchResult
 from app.models.schemas import MatchExplanation, RankedCandidate, ScreeningResponse
+from app.repositories import candidate_repository
 from app.services.embeddings import vector_store
 from app.services.matching import generate_match_explanation
 
@@ -41,6 +42,7 @@ def build_job_embed_text(job: Job) -> str:
 
 def rank_candidates_for_job(
     db: Session,
+    tenant_id: UUID,
     job: Job,
     top_k: int | None = None,
     top_n: int | None = None,
@@ -54,20 +56,25 @@ def rank_candidates_for_job(
     top_n = top_n or settings.ranking_top_n
 
     job_text = build_job_embed_text(job)
-    vector_matches = vector_store.query_similar_candidates(job_text, top_k=top_k)
+    vector_matches = vector_store.query_similar_candidates(
+        job_text, namespace=str(tenant_id), top_k=top_k
+    )
 
     ranked: list[RankedCandidate] = []
 
     # Resolve candidates first, sequentially - this is a fast DB read, and
     # keeps the one SQLAlchemy session single-threaded (sessions aren't
-    # thread-safe, so all db.query() calls stay on the main thread).
+    # thread-safe, so all DB reads stay on the main thread).
     resolved: list[tuple[Candidate, float]] = []
     for match in vector_matches:
         candidate_id = match.get("candidate_id")
         if not candidate_id:
             continue
 
-        candidate = db.query(Candidate).filter(Candidate.id == UUID(candidate_id)).first()
+        # tenant_id filter is defense in depth: even if the Pinecone
+        # namespace above were ever misconfigured, this can't resolve a
+        # different tenant's candidate row.
+        candidate = candidate_repository.get_by_id(db, tenant_id, UUID(candidate_id))
         if not candidate:
             continue
 

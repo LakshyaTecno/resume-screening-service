@@ -104,7 +104,7 @@ def test_upload_candidate_llm_unavailable_returns_503(client, mock_vector_store,
 
 
 def test_create_candidate_vector_indexing_error_returns_502(client, mock_vector_store):
-    def raise_pinecone_down(candidate_id, text, metadata):
+    def raise_pinecone_down(candidate_id, text, metadata, namespace):
         raise RuntimeError("Pinecone unreachable")
 
     mock_vector_store.upsert_candidate = raise_pinecone_down

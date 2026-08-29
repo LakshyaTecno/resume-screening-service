@@ -5,11 +5,22 @@ import pytest
 
 import app.worker as worker
 from app.exceptions import ResumeContentError
-from app.models.db import Candidate
+from app.models.db import Candidate, Tenant
 from tests.factories import FakeEmptyPdfReader, FakePdfReader, FakeStructuredLLM, make_parsed_resume
 
 
-def test_process_message_happy_path(worker_session_local, monkeypatch, mock_vector_store):
+def _seed_tenant(db_session) -> Tenant:
+    tenant = Tenant(name="Worker Test Tenant")
+    db_session.add(tenant)
+    db_session.commit()
+    db_session.refresh(tenant)
+    return tenant
+
+
+def test_process_message_happy_path(
+    worker_session_local, db_session, monkeypatch, mock_vector_store
+):
+    tenant = _seed_tenant(db_session)
     monkeypatch.setattr(worker, "SessionLocal", worker_session_local)
 
     parsed = make_parsed_resume(full_name="Frank Example")
@@ -25,6 +36,7 @@ def test_process_message_happy_path(worker_session_local, monkeypatch, mock_vect
     worker._process_message(
         {
             "candidate_id": "ext-candidate-123",
+            "tenant_id": str(tenant.id),
             "s3_bucket": "resumes-bucket",
             "s3_key": "uploads/frank.pdf",
         }
@@ -38,17 +50,19 @@ def test_process_message_happy_path(worker_session_local, monkeypatch, mock_vect
     session = worker_session_local()
     saved = session.query(Candidate).filter(Candidate.full_name == "Frank Example").first()
     assert saved is not None
+    assert saved.tenant_id == tenant.id
     session.close()
 
 
 def test_process_message_empty_resume_propagates_resume_content_error(
-    worker_session_local, monkeypatch, mock_vector_store
+    worker_session_local, db_session, monkeypatch, mock_vector_store
 ):
     """_process_message itself doesn't catch anything - run()'s message
     loop does, deciding whether to delete or retry based on exception
     type. This locks in that a ResumeContentError actually reaches that
     boundary instead of being silently swallowed or turned into something
     else along the way."""
+    tenant = _seed_tenant(db_session)
     monkeypatch.setattr(worker, "SessionLocal", worker_session_local)
     monkeypatch.setattr("app.services.resume_parser.PdfReader", FakeEmptyPdfReader)
 
@@ -62,6 +76,7 @@ def test_process_message_empty_resume_propagates_resume_content_error(
         worker._process_message(
             {
                 "candidate_id": "ext-candidate-456",
+                "tenant_id": str(tenant.id),
                 "s3_bucket": "resumes-bucket",
                 "s3_key": "uploads/blank.pdf",
             }
