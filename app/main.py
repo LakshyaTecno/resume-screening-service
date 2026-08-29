@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.config import get_settings
-from app.routers import billing, candidates, jobs, screening
+from app.routers import admin, billing, candidates, jobs, screening
 
 settings = get_settings()
 
@@ -24,6 +24,7 @@ app.include_router(candidates.router, prefix="/api/v1")
 app.include_router(jobs.router, prefix="/api/v1")
 app.include_router(screening.router, prefix="/api/v1")
 app.include_router(billing.router, prefix="/api/v1")
+app.include_router(admin.router, prefix="/api/v1")
 
 
 @app.get("/health")

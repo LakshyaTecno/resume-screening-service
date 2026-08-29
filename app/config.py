@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     razorpay_key_secret: str = ""
     razorpay_webhook_secret: str = ""
 
+    # Admin API (app/admin_auth.py, app/routers/admin.py) - HTTP Basic,
+    # a single operator credential, not tenant API keys. Empty by default,
+    # same fail-closed intent as require_api_key.
+    admin_username: str = ""
+    admin_password: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -96,6 +96,71 @@ class RankedCandidate(BaseModel):
     gaps: list[str] = Field(default_factory=list)
 
 
+class TenantCreate(BaseModel):
+    name: str
+
+
+class TenantResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    created_at: datetime
+
+
+class ApiKeyResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    tenant_id: UUID
+    key_prefix: str
+    created_at: datetime
+    revoked_at: datetime | None
+    last_used_at: datetime | None
+
+
+class ApiKeyCreateResponse(ApiKeyResponse):
+    # Only ever populated once, in the response to the creation call - the
+    # raw key isn't retrievable again after this, since only its hash is
+    # stored.
+    raw_key: str
+
+
+class PlanCreate(BaseModel):
+    name: str
+    price: int
+    currency: str = "INR"
+    monthly_resume_quota: int | None = None
+    razorpay_plan_id: str
+
+
+class PlanResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    price: int
+    currency: str
+    monthly_resume_quota: int | None
+    razorpay_plan_id: str
+
+
+class AdminSubscriptionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    tenant_id: UUID
+    plan_id: UUID
+    status: str
+    current_period_end: datetime | None
+
+
+class TenantUsageResponse(BaseModel):
+    tenant_id: UUID
+    candidates_this_period: int
+    monthly_resume_quota: int | None
+
+
 class SubscribeRequest(BaseModel):
     plan_id: UUID
 

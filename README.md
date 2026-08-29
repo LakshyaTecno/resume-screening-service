@@ -120,8 +120,9 @@ affect any other tenant.
 revoked key are all indistinguishable to a caller - every one of them is a
 401. There's no "unconfigured" state that falls open.
 
-Tenant and API-key management has no dedicated endpoint yet in this
-service - see the admin API work tracked for that.
+Tenant and API-key management lives under `/api/v1/admin/*` - see
+[Admin API](#admin-api) below. It's a separate credential from tenant API
+keys, since an admin operates across every tenant.
 
 ## Billing
 
@@ -149,6 +150,32 @@ you can do, in your own Razorpay dashboard. Tests
 ([`tests/test_billing.py`](tests/test_billing.py)) exercise the whole flow
 against a mocked Razorpay client and a locally-computed webhook signature,
 which needs no live account.
+
+## Admin API
+
+`/api/v1/admin/*` - tenant/key/plan/subscription management, for an
+operator, not a tenant. Protected by
+[`app/admin_auth.py`](app/admin_auth.py)'s `require_admin` (HTTP Basic
+against `ADMIN_USERNAME`/`ADMIN_PASSWORD`, checked with
+`secrets.compare_digest` to avoid a timing side-channel), not
+`require_api_key` - completely separate credential space from tenants.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET`/`POST` | `/api/v1/admin/tenants` | List / create tenants |
+| `GET` | `/api/v1/admin/tenants/{id}` | Fetch one tenant |
+| `GET`/`POST` | `/api/v1/admin/tenants/{id}/api-keys` | List keys (never returns the hash) / issue a new one |
+| `POST` | `/api/v1/admin/api-keys/{id}/revoke` | Revoke a key immediately |
+| `GET`/`POST` | `/api/v1/admin/plans` | List / create billing plans |
+| `GET` | `/api/v1/admin/subscriptions` | List subscriptions, optionally `?tenant_id=` |
+| `GET` | `/api/v1/admin/tenants/{id}/usage` | Current-period resume count vs. quota - shares its counting logic with `enforce_quota` so the two can't disagree |
+
+Creating an API key returns the raw key in the response body **exactly
+once** - only its hash is stored, so if it's lost, revoke it and issue a
+new one rather than trying to retrieve it.
+
+This is a JSON API only - no UI. A separate frontend against this API is
+the planned next step, not part of this service.
 
 ## Features
 
@@ -291,6 +318,7 @@ already excluded by `.gitignore`. The example file is safe to commit.
 | `AWS_REGION`, `SQS_QUEUE_URL`, `S3_BUCKET_NAME`, `DYNAMODB_TABLE_NAME` | Yes, for upload/worker | Real AWS resources the ingestion pipeline consumes — see `infra/terraform/`. Used by both the upload endpoint (producer) and the worker (consumer) |
 | `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` | Yes, for billing | From your Razorpay dashboard — see [Billing](#billing) |
 | `RAZORPAY_WEBHOOK_SECRET` | Yes, for billing | From your Razorpay webhook config; verifies `POST /billing/webhook` actually came from Razorpay |
+| `ADMIN_USERNAME`, `ADMIN_PASSWORD` | Yes, for the admin API | HTTP Basic credential for `/api/v1/admin/*` — see [Admin API](#admin-api) |
 
 Note: outside Docker, `127.0.0.1:5433`/`127.0.0.1:11435` (the values in
 `.env.example`) reach Postgres/Ollama through their Compose port mappings.
