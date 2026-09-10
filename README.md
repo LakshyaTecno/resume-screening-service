@@ -58,8 +58,11 @@ The two subsections below zoom into stages 3 and 5 individually.
 ### 1. Ingestion pipeline — resume upload & parsing
 
 `POST /api/v1/candidates/upload` (`app/routers/candidates.py`) is the
-producer: it creates a `pending` `Candidate` row, uploads the raw PDF to
-S3, and publishes a `resume-uploaded` message to SQS
+producer: gated by [`app/billing_guard.py`](app/billing_guard.py)'s
+`enforce_quota` (402 with no active subscription or an exhausted monthly
+quota — see [Billing](#billing)) rather than plain `require_api_key`, it
+then creates a `pending` `Candidate` row, uploads the raw PDF to S3, and
+publishes a `resume-uploaded` message to SQS
 (`app/services/ingestion.py`) — no SNS topic in front of it, since fan-out
 to multiple consumers only pays off if there's more than one, and this
 service is the only consumer. It returns immediately (202) with the
@@ -76,13 +79,15 @@ this uses plain SQS, not SNS fan-out.
 
 ```mermaid
 flowchart TD
-    Upload["POST /candidates/upload"] --> S3[(S3: resume upload)]
+    Req["POST /candidates/upload"] --> Quota{"Quota check<br/>(billing_guard.enforce_quota)"}
+    Quota -->|"402 - no quota left"| Rejected["Rejected"]
+    Quota -->|ok| Upload["Accepted"] --> S3[(S3: resume upload)]
     Upload --> PGPending[(PostgreSQL: status=pending)]
     S3 --> SQS[SQS: resume-uploaded]
     SQS --> Worker[app/worker.py]
     Worker --> Parser["Resume Parser (Ollama)"]
     Parser --> PG[(PostgreSQL: status=processed)]
-    Parser --> Embed["Embeddings (Ollama)"]
+    Parser --> Embed["Embeddings (Ollama)<br/>namespace = tenant_id"]
     Embed --> PC[(Pinecone)]
     PG --> DDB[(DynamoDB status)]
     DDB --> Lambda[Notifier Lambda]
@@ -116,17 +121,21 @@ testing, but aren't documented as a stable public API.)
 
 ```mermaid
 flowchart LR
-    JD["POST /jobs"] --> PC[(Pinecone)]
-    PC -->|Top-K cosine similarity| Shortlist[Candidate Shortlist]
-    Shortlist --> LLM2[Ollama LLM]
-    LLM2 -->|Rank + Explain| Results["POST /screening/rank response"]
+    JD["POST /jobs"] --> PC[("Pinecone<br/>namespace = tenant_id")]
+    Rank["POST /screening/rank"] --> Query["Top-K cosine similarity<br/>(tenant namespace only)"]
+    PC --> Query
+    Query --> Recheck["Postgres re-checks tenant_id<br/>(defense in depth)"]
+    Recheck --> Shortlist[Candidate Shortlist]
+    Shortlist --> LLM2["Ollama LLM<br/>(concurrent, thread pool)"]
+    LLM2 -->|"Rank + explain (score 0-100)"| Results["POST /screening/rank response"]
 ```
 
 Every `/api/v1/*` request needs an `X-API-Key` header for a real,
 non-revoked key (see [Authentication and multi-tenancy](#authentication-and-multi-tenancy)
-below) - `/health` and `/metrics` are the only routes that don't. There's
-no tenant/key-creation endpoint yet, so `$API_KEY` below stands in for a
-key you've inserted directly into the `api_keys` table for now.
+below) - `/health` and `/metrics` are the only routes that don't. Get a
+key by provisioning a tenant through the [Admin API](#admin-api)
+(`POST /api/v1/admin/tenants`, then `POST /api/v1/admin/tenants/{id}/api-keys`)
+- `$API_KEY` below is the raw key that call returns, shown exactly once.
 
 ```bash
 # 1. Create a job posting
