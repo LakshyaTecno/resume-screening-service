@@ -4,7 +4,56 @@ AI microservice (FastAPI) for a recruitment platform — resume parsing, candida
 
 ## Architecture
 
-Two pipelines, both now owned end-to-end by this service.
+Two pipelines, both now owned end-to-end by this service — but neither
+runs in isolation. The full picture, tenant provisioning through a ranked
+result:
+
+```mermaid
+flowchart TD
+    subgraph Provisioning["1. Provisioning (admin-only, one-time)"]
+        A1["Admin"] --> A2["POST /admin/tenants"] --> A3["Tenant + API key issued<br/>(key hashed, shown once)"]
+    end
+
+    subgraph Billing["2. Billing (Razorpay)"]
+        B1["Tenant: POST /billing/subscribe"] --> B2["Razorpay hosted checkout"] --> B3["POST /billing/webhook<br/>(signature verified on raw body)"]
+    end
+
+    subgraph Ingestion["3. Candidate ingestion (event-driven, AWS)"]
+        C1["Tenant: POST /candidates/upload<br/>quota checked first"] --> C2["Candidate row created<br/>(status = pending), PDF to S3"]
+        C2 --> C3["Message to SQS<br/>202 returned to tenant"]
+        C3 --> C4["Worker polls SQS,<br/>downloads PDF from S3"]
+        C4 --> C5["Ollama LLM parses;<br/>embeds into Pinecone (ns = tenant_id)"]
+        C5 --> C6["Status updated:<br/>processed (stays 'processing' on transient failure)"]
+    end
+
+    subgraph JobCreation["4. Job creation"]
+        D1["Tenant: POST /jobs/"] --> D2["Job text embedded,<br/>stored in Pinecone (ns = tenant_id)"]
+    end
+
+    subgraph Ranking["5. Screening & ranking"]
+        E1["Tenant: POST /screening/rank"] --> E2["Pinecone top-K query,<br/>scoped to tenant namespace"]
+        E2 --> E3["Postgres re-checks tenant_id<br/>(defense in depth)"]
+        E3 --> E4["LLM scores each candidate<br/>concurrently (thread pool)"]
+        E4 --> E5["Ranked results (score 0-100,<br/>strengths/gaps) saved + returned"]
+    end
+
+    A3 -.-> C1
+    A3 -.-> D1
+    A3 -.-> E1
+    B3 -.->|active subscription| C1
+```
+
+An admin provisions a tenant and its API key once (stage 1). Everything
+after that is tenant-initiated and scoped to that tenant end to end: a
+subscription gates resume uploads (stage 2 → 3), uploads and jobs both
+land in Pinecone under that tenant's own namespace (stages 3 and 4), and
+ranking only ever searches within it, with Postgres independently
+re-checking `tenant_id` as a second, defense-in-depth layer before
+anything reaches the LLM (stage 5). See
+[Authentication and multi-tenancy](#authentication-and-multi-tenancy)
+for why that second check exists at all.
+
+The two subsections below zoom into stages 3 and 5 individually.
 
 ### 1. Ingestion pipeline — resume upload & parsing
 
