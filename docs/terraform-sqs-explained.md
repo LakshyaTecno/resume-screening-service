@@ -98,15 +98,16 @@ decision separate from the permissions themselves. `worker_permissions` is
 a standalone, attachable policy document — whatever identity ends up
 running the worker attaches it.
 
-## `resume_uploads_bucket_arn` — a placeholder, on purpose
+## Update: the S3 bucket is now managed here too
 
-```hcl
-variable "resume_uploads_bucket_arn" {
-  default = "arn:aws:s3:::CHANGE_ME"
-}
-```
-
-The S3 bucket resumes get uploaded to is Service A's infrastructure, per
-the original architecture — not created here, only referenced so the IAM
-policy can grant read access to it. `CHANGE_ME` is a clear signal that a
-real value has to be supplied before this could actually be applied.
+This section originally described `resume_uploads_bucket_arn` as a
+placeholder referencing an external "Service A"'s bucket, not created by
+this Terraform. That's no longer accurate: this service now owns the
+upload endpoint itself (`app/routers/candidates.py` →
+`app/services/ingestion.py`), so it owns the bucket too. See `s3.tf`'s
+`aws_s3_bucket.resume_uploads` and `variables.tf`'s
+`resume_uploads_bucket_name` (renamed from `resume_uploads_bucket_arn`,
+since the ARN is now derived from the managed resource rather than
+supplied directly). `iam.tf`'s worker policy grants it read access
+(`s3:GetObject`); a new `api_permissions` policy grants the API process
+write access (`s3:PutObject`) for the upload endpoint.

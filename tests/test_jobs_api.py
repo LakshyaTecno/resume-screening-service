@@ -32,7 +32,7 @@ def test_list_jobs_happy_path(client, mock_vector_store):
 
 
 def test_create_job_vector_indexing_error_returns_502(client, mock_vector_store):
-    def raise_pinecone_down(job_id, text, metadata):
+    def raise_pinecone_down(job_id, text, metadata, namespace):
         raise RuntimeError("Pinecone unreachable")
 
     mock_vector_store.upsert_job = raise_pinecone_down

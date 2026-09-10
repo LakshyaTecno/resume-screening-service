@@ -3,6 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.auth import require_api_key
 from app.database import get_db
 from app.exceptions import ResourceNotFoundError, VectorIndexingError
 from app.models.schemas import JobCreate, JobResponse
@@ -12,21 +13,29 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 
 @router.post("/", response_model=JobResponse, status_code=201)
-def create_job(payload: JobCreate, db: Session = Depends(get_db)):
+def create_job(
+    payload: JobCreate,
+    tenant_id: UUID = Depends(require_api_key),
+    db: Session = Depends(get_db),
+):
     try:
-        return job_service.create_job(db, payload)
+        return job_service.create_job(db, tenant_id, payload)
     except VectorIndexingError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.get("/", response_model=list[JobResponse])
-def list_jobs(db: Session = Depends(get_db)):
-    return job_service.list_jobs(db)
+def list_jobs(tenant_id: UUID = Depends(require_api_key), db: Session = Depends(get_db)):
+    return job_service.list_jobs(db, tenant_id)
 
 
 @router.get("/{job_id}", response_model=JobResponse)
-def get_job(job_id: UUID, db: Session = Depends(get_db)):
+def get_job(
+    job_id: UUID,
+    tenant_id: UUID = Depends(require_api_key),
+    db: Session = Depends(get_db),
+):
     try:
-        return job_service.get_job(db, job_id)
+        return job_service.get_job(db, tenant_id, job_id)
     except ResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

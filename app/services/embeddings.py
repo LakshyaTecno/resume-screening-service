@@ -42,7 +42,13 @@ class VectorStore:
     def embed_text(self, text: str) -> list[float]:
         return get_embeddings().embed_query(text)
 
-    def upsert_candidate(self, candidate_id: str, text: str, metadata: dict) -> str:
+    def upsert_candidate(self, candidate_id: str, text: str, metadata: dict, namespace: str) -> str:
+        """`namespace` is required, not defaulted - every caller must be
+        explicit about which tenant this vector belongs to. Namespace is
+        Pinecone's own structural isolation primitive, used here instead of
+        (in addition to) a metadata filter: a forgotten filter clause is a
+        real cross-tenant data leak risk, while a wrong/missing namespace
+        just returns no results rather than someone else's data."""
         vector = self.embed_text(text)
         vector_id = f"candidate-{candidate_id}"
         self.index.upsert(
@@ -52,11 +58,12 @@ class VectorStore:
                     "values": vector,
                     "metadata": {**metadata, "type": "candidate", "candidate_id": candidate_id},
                 }
-            ]
+            ],
+            namespace=namespace,
         )
         return vector_id
 
-    def upsert_job(self, job_id: str, text: str, metadata: dict) -> str:
+    def upsert_job(self, job_id: str, text: str, metadata: dict, namespace: str) -> str:
         vector = self.embed_text(text)
         vector_id = f"job-{job_id}"
         self.index.upsert(
@@ -66,12 +73,13 @@ class VectorStore:
                     "values": vector,
                     "metadata": {**metadata, "type": "job", "job_id": job_id},
                 }
-            ]
+            ],
+            namespace=namespace,
         )
         return vector_id
 
     def query_similar_candidates(
-        self, job_text: str, top_k: int = 20, job_id: str | None = None
+        self, job_text: str, namespace: str, top_k: int = 20
     ) -> list[dict]:
         query_vector = self.embed_text(job_text)
         filter_dict = {"type": {"$eq": "candidate"}}
@@ -80,6 +88,7 @@ class VectorStore:
             top_k=top_k,
             include_metadata=True,
             filter=filter_dict,
+            namespace=namespace,
         )
         matches = []
         for match in results.get("matches", []):

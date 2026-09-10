@@ -4,67 +4,144 @@ AI microservice (FastAPI) for a recruitment platform — resume parsing, candida
 
 ## Architecture
 
-Two independent pipelines. Resumes never arrive over this service's own API.
+Two pipelines, both now owned end-to-end by this service — but neither
+runs in isolation. The full picture, tenant provisioning through a ranked
+result:
 
-### 1. Ingestion pipeline — resume parsing
+```mermaid
+flowchart TD
+    subgraph Provisioning["1. Provisioning (admin-only, one-time)"]
+        A1["Admin"] --> A2["POST /admin/tenants"] --> A3["Tenant + API key issued<br/>(key hashed, shown once)"]
+    end
 
-Event-driven, not API-driven. An upstream service publishes a
-`resume-uploaded` event directly to an SQS queue — no SNS topic in front of
-it, since fan-out to multiple consumers only pays off if there's more than
-one, and this service is the only consumer. This service's worker
-(`app/worker.py`) consumes it, parses the PDF via Ollama, stores it in
-PostgreSQL, and embeds it in Pinecone. See
+    subgraph Billing["2. Billing (Razorpay)"]
+        B1["Tenant: POST /billing/subscribe"] --> B2["Razorpay hosted checkout"] --> B3["POST /billing/webhook<br/>(signature verified on raw body)"]
+    end
+
+    subgraph Ingestion["3. Candidate ingestion (event-driven, AWS)"]
+        C1["Tenant: POST /candidates/upload<br/>quota checked first"] --> C2["Candidate row created<br/>(status = pending), PDF to S3"]
+        C2 --> C3["Message to SQS<br/>202 returned to tenant"]
+        C3 --> C4["Worker polls SQS,<br/>downloads PDF from S3"]
+        C4 --> C5["Ollama LLM parses;<br/>embeds into Pinecone (ns = tenant_id)"]
+        C5 --> C6["Status updated:<br/>processed (stays 'processing' on transient failure)"]
+    end
+
+    subgraph JobCreation["4. Job creation"]
+        D1["Tenant: POST /jobs/"] --> D2["Job text embedded,<br/>stored in Pinecone (ns = tenant_id)"]
+    end
+
+    subgraph Ranking["5. Screening & ranking"]
+        E1["Tenant: POST /screening/rank"] --> E2["Pinecone top-K query,<br/>scoped to tenant namespace"]
+        E2 --> E3["Postgres re-checks tenant_id<br/>(defense in depth)"]
+        E3 --> E4["LLM scores each candidate<br/>concurrently (thread pool)"]
+        E4 --> E5["Ranked results (score 0-100,<br/>strengths/gaps) saved + returned"]
+    end
+
+    A3 -.-> C1
+    A3 -.-> D1
+    A3 -.-> E1
+    B3 -.->|active subscription| C1
+```
+
+An admin provisions a tenant and its API key once (stage 1). Everything
+after that is tenant-initiated and scoped to that tenant end to end: a
+subscription gates resume uploads (stage 2 → 3), uploads and jobs both
+land in Pinecone under that tenant's own namespace (stages 3 and 4), and
+ranking only ever searches within it, with Postgres independently
+re-checking `tenant_id` as a second, defense-in-depth layer before
+anything reaches the LLM (stage 5). See
+[Authentication and multi-tenancy](#authentication-and-multi-tenancy)
+for why that second check exists at all.
+
+The two subsections below zoom into stages 3 and 5 individually.
+
+### 1. Ingestion pipeline — resume upload & parsing
+
+`POST /api/v1/candidates/upload` (`app/routers/candidates.py`) is the
+producer: gated by [`app/billing_guard.py`](app/billing_guard.py)'s
+`enforce_quota` (402 with no active subscription or an exhausted monthly
+quota — see [Billing](#billing)) rather than plain `require_api_key`, it
+then creates a `pending` `Candidate` row, uploads the raw PDF to S3, and
+publishes a `resume-uploaded` message to SQS
+(`app/services/ingestion.py`) — no SNS topic in front of it, since fan-out
+to multiple consumers only pays off if there's more than one, and this
+service is the only consumer. It returns immediately (202) with the
+candidate's id; there's no LLM call in that request.
+
+This service's own worker (`app/worker.py`) is the consumer: it reads the
+message, downloads the PDF from S3, parses it via Ollama, and updates the
+*same* `Candidate` row in place (`pending` → `processing` → `processed`,
+or `failed` on a permanent parse error), then embeds it in Pinecone. A
+client polls `GET /api/v1/candidates/{id}` and watches `status` to know
+when it's done. See
 [docs/terraform-sqs-explained.md](docs/terraform-sqs-explained.md) for why
 this uses plain SQS, not SNS fan-out.
 
 ```mermaid
 flowchart TD
-    S3[(S3: resume upload)] --> SQS[SQS: resume-uploaded]
+    Req["POST /candidates/upload"] --> Quota{"Quota check<br/>(billing_guard.enforce_quota)"}
+    Quota -->|"402 - no quota left"| Rejected["Rejected"]
+    Quota -->|ok| Upload["Accepted"] --> S3[(S3: resume upload)]
+    Upload --> PGPending[(PostgreSQL: status=pending)]
+    S3 --> SQS[SQS: resume-uploaded]
     SQS --> Worker[app/worker.py]
     Worker --> Parser["Resume Parser (Ollama)"]
-    Parser --> PG[(PostgreSQL)]
-    Parser --> Embed["Embeddings (Ollama)"]
+    Parser --> PG[(PostgreSQL: status=processed)]
+    Parser --> Embed["Embeddings (Ollama)<br/>namespace = tenant_id"]
     Embed --> PC[(Pinecone)]
     PG --> DDB[(DynamoDB status)]
     DDB --> Lambda[Notifier Lambda]
 ```
 
-Run it locally with:
+Run the worker locally with:
 
 ```bash
 python -m app.worker
 ```
 
 Needs `SQS_QUEUE_URL`, `S3_BUCKET_NAME`, `DYNAMODB_TABLE_NAME`, and
-`AWS_REGION` set (see `.env.example`). A successful parse writes
-`status: ai-processed` to DynamoDB for a downstream notification loop.
+`AWS_REGION` set (see `.env.example`) — the same variables the upload
+endpoint reads, since this service is now both producer and consumer of
+its own queue.
 
 ### 2. Screening pipeline — matching & ranking
 
-API-driven — the two endpoints this service exposes:
+API-driven:
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/api/v1/jobs/` | Create job posting → embed |
+| `POST` | `/api/v1/candidates/upload` | Enqueue a resume for async parsing (202, `status: pending`) |
+| `GET` | `/api/v1/candidates/{id}` | Poll parsing status / fetch a parsed candidate |
 | `POST` | `/api/v1/screening/rank` | Hybrid rank candidates for a job |
 
-Plus `GET /health` for liveness/readiness checks. (A few other routes —
-`GET /api/v1/jobs/`, candidate CRUD under `/api/v1/candidates/` — still
-exist in the code for manual/dev testing, but aren't part of the intended
-two-pipeline architecture and aren't documented as a stable public API.)
+Plus `GET /health` for liveness/readiness checks. (`GET /api/v1/jobs/` and
+the JSON-body `POST /api/v1/candidates/` still exist for manual/dev
+testing, but aren't documented as a stable public API.)
 
 ```mermaid
 flowchart LR
-    JD["POST /jobs"] --> PC[(Pinecone)]
-    PC -->|Top-K cosine similarity| Shortlist[Candidate Shortlist]
-    Shortlist --> LLM2[Ollama LLM]
-    LLM2 -->|Rank + Explain| Results["POST /screening/rank response"]
+    JD["POST /jobs"] --> PC[("Pinecone<br/>namespace = tenant_id")]
+    Rank["POST /screening/rank"] --> Query["Top-K cosine similarity<br/>(tenant namespace only)"]
+    PC --> Query
+    Query --> Recheck["Postgres re-checks tenant_id<br/>(defense in depth)"]
+    Recheck --> Shortlist[Candidate Shortlist]
+    Shortlist --> LLM2["Ollama LLM<br/>(concurrent, thread pool)"]
+    LLM2 -->|"Rank + explain (score 0-100)"| Results["POST /screening/rank response"]
 ```
+
+Every `/api/v1/*` request needs an `X-API-Key` header for a real,
+non-revoked key (see [Authentication and multi-tenancy](#authentication-and-multi-tenancy)
+below) - `/health` and `/metrics` are the only routes that don't. Get a
+key by provisioning a tenant through the [Admin API](#admin-api)
+(`POST /api/v1/admin/tenants`, then `POST /api/v1/admin/tenants/{id}/api-keys`)
+- `$API_KEY` below is the raw key that call returns, shown exactly once.
 
 ```bash
 # 1. Create a job posting
 curl -X POST http://localhost:8000/api/v1/jobs/ \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
   -d '{
     "title": "Senior Python Developer",
     "company": "Acme Corp",
@@ -76,8 +153,87 @@ curl -X POST http://localhost:8000/api/v1/jobs/ \
 # 2. Rank candidates for the job
 curl -X POST http://localhost:8000/api/v1/screening/rank \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
   -d '{"job_id": "<job-uuid>", "top_k": 20, "top_n": 5}'
 ```
+
+## Authentication and multi-tenancy
+
+Every route under `/api/v1/` (jobs, candidates, screening) requires a
+matching `X-API-Key` header, resolved to a `tenant_id` by
+[`app/auth.py`](app/auth.py)'s `require_api_key` dependency - every handler
+receives that `tenant_id` and every query is scoped by it, so one tenant's
+jobs/candidates are invisible to every other tenant (see
+[`tests/test_tenancy.py`](tests/test_tenancy.py)). `GET /health` and
+`GET /metrics` are intentionally exempt - Docker's healthcheck and a
+Prometheus scrape config would otherwise need a key too.
+
+**Keys, not passwords**: only a SHA-256 hash of each key is stored
+(`api_keys.hashed_key`) - the raw key is shown exactly once, at creation,
+and is never retrievable again. There's no shared/global key anymore; every
+tenant has their own, and revoking one (`api_keys.revoked_at`) doesn't
+affect any other tenant.
+
+**Fails closed**: an empty `api_keys` table, an unrecognized key, or a
+revoked key are all indistinguishable to a caller - every one of them is a
+401. There's no "unconfigured" state that falls open.
+
+Tenant and API-key management lives under `/api/v1/admin/*` - see
+[Admin API](#admin-api) below. It's a separate credential from tenant API
+keys, since an admin operates across every tenant.
+
+## Billing
+
+Razorpay-backed subscriptions gate the resume-consuming endpoints:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/v1/billing/subscribe` | Create/replace a tenant's subscription to a plan, returns a Razorpay-hosted checkout URL |
+| `POST` | `/api/v1/billing/webhook` | Razorpay calls this directly - not tenant-key-authenticated, verified by `X-Razorpay-Signature` instead |
+
+`POST /api/v1/candidates/upload` is gated by
+[`app/billing_guard.py`](app/billing_guard.py)'s `enforce_quota` dependency
+in place of plain `require_api_key`: no active subscription, or a plan's
+`monthly_resume_quota` already used up, both return `402 Payment Required`.
+Quota is counted live from `candidates` rows created in the current
+billing period, not a separate running counter - always correct by
+construction, no risk of drifting out of sync with reality if a webhook
+is ever missed.
+
+One subscription per tenant (`subscriptions.tenant_id` is unique) - not a
+history table. Changing plans updates the existing row.
+
+There's no live Razorpay account behind this yet - that's a signup only
+you can do, in your own Razorpay dashboard. Tests
+([`tests/test_billing.py`](tests/test_billing.py)) exercise the whole flow
+against a mocked Razorpay client and a locally-computed webhook signature,
+which needs no live account.
+
+## Admin API
+
+`/api/v1/admin/*` - tenant/key/plan/subscription management, for an
+operator, not a tenant. Protected by
+[`app/admin_auth.py`](app/admin_auth.py)'s `require_admin` (HTTP Basic
+against `ADMIN_USERNAME`/`ADMIN_PASSWORD`, checked with
+`secrets.compare_digest` to avoid a timing side-channel), not
+`require_api_key` - completely separate credential space from tenants.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET`/`POST` | `/api/v1/admin/tenants` | List / create tenants |
+| `GET` | `/api/v1/admin/tenants/{id}` | Fetch one tenant |
+| `GET`/`POST` | `/api/v1/admin/tenants/{id}/api-keys` | List keys (never returns the hash) / issue a new one |
+| `POST` | `/api/v1/admin/api-keys/{id}/revoke` | Revoke a key immediately |
+| `GET`/`POST` | `/api/v1/admin/plans` | List / create billing plans |
+| `GET` | `/api/v1/admin/subscriptions` | List subscriptions, optionally `?tenant_id=` |
+| `GET` | `/api/v1/admin/tenants/{id}/usage` | Current-period resume count vs. quota - shares its counting logic with `enforce_quota` so the two can't disagree |
+
+Creating an API key returns the raw key in the response body **exactly
+once** - only its hash is stored, so if it's lost, revoke it and issue a
+new one rather than trying to retrieve it.
+
+This is a JSON API only - no UI. A separate frontend against this API is
+the planned next step, not part of this service.
 
 ## Features
 
@@ -86,6 +242,99 @@ curl -X POST http://localhost:8000/api/v1/screening/rank \
 | **Resume Parsing** | PDF loader + LLM structured output (Pydantic) into PostgreSQL |
 | **Candidate–Job Matching** | Resume/job embeddings in Pinecone, matched via cosine similarity |
 | **Resume Ranking** | Hybrid retrieval — vector search narrows to top-K, then LLM ranks the shortlist |
+
+## AI techniques used
+
+**Type of AI**: locally-hosted, open-weight LLMs via [Ollama](https://ollama.com/)
+— `llama3.2:3b` for language tasks, `nomic-embed-text` for embeddings — not a
+hosted API like OpenAI or Anthropic. The whole pipeline runs on a laptop, no
+per-token cost, no data leaving the machine.
+
+**This is not agentic AI**, and that's a deliberate distinction, not an
+omission. Nothing here autonomously plans multi-step actions, decides which
+tool to call, or runs in a reasoning loop (no LangGraph, no `AgentExecutor`,
+no tool-calling). Every LLM call is a single, direct request: parse this
+text, score this candidate. What's actually implemented:
+
+1. **Structured output extraction** (`app/services/resume_parser.py`) —
+   LangChain's `with_structured_output` forces the LLM's response into a
+   strict Pydantic schema (`ParsedResume`), turning freeform resume text
+   into valid, typed JSON reliably, not just "usually."
+2. **RAG-style hybrid retrieval + LLM re-ranking** (`app/services/ranking.py`,
+   `matching.py`) — Pinecone vector search narrows a job's candidate pool to
+   the top-K by cosine similarity (cheap), then the LLM evaluates each
+   shortlisted candidate individually — structured score, strengths, gaps,
+   summary — and results are re-sorted by that score (expensive, but only
+   on the shortlist). Retrieve cheap, reason expensive on the narrowed set —
+   a standard, real production RAG pattern.
+3. **Prompting a small local model reliably** — `llama3.2:3b` initially
+   dropped the summary/experience-description fields during extraction even
+   when present in the source text; fixed by making the prompt explicitly
+   call out fields the model tends to skip. A concrete, real example of the
+   gap between "a bigger hosted model would probably just get this right"
+   and what it actually takes to get consistent structured output from a
+   small local one.
+4. **Concurrent ranking, not sequential** (`app/services/ranking.py`) — the
+   per-candidate LLM call in `rank_candidates_for_job()` used to run one
+   candidate at a time, so ranking the default `top_k=20` shortlist meant 20
+   back-to-back local-model generations before a response went out. Local
+   open-weight models trade per-token cost for raw speed, and a synchronous
+   API endpoint can't hide that latency the way the event-driven ingestion
+   pipeline already does. Candidates are now evaluated with a
+   `ThreadPoolExecutor` (`RANKING_CONCURRENCY`, default `5`), while the
+   SQLAlchemy session itself stays single-threaded — only the DB-free LLM
+   calls run in parallel. This only pays off if Ollama is actually
+   configured to process that many requests at once (`OLLAMA_NUM_PARALLEL`
+   on the Ollama server); otherwise it just queues them at the same total
+   cost, same total time.
+
+## Embeddings and vector search (Pinecone)
+
+**Model**: `nomic-embed-text` via Ollama — 768-dimensional embeddings,
+generated locally, no external embedding API. The Pinecone index name
+(`resume-screening-nomic-768`) bakes in the dimension on purpose, as a
+reminder that an index is permanently tied to one embedding
+dimension/model.
+
+**What actually gets embedded** — not raw PDF text. `build_candidate_embed_text()`
+/ `build_job_embed_text()` (`app/services/ranking.py`) assemble a plain-text
+summary from the already-*parsed*, structured fields first (name, summary,
+skills, each job's title/company/description, education) — the vector
+reflects clean structured data, not noisy raw resume text.
+
+**Index management** (`app/services/embeddings.py`, `VectorStore`):
+- Lazily initialized — the Pinecone client and index handle are only
+  created on first real use, not at import time.
+- **Self-sizing index creation**: if the configured index doesn't exist
+  yet, it's created automatically with `metric="cosine"` on Pinecone
+  Serverless — and its dimension isn't hardcoded, it's measured by
+  actually embedding a probe string first. That avoids a real class of
+  bug: an index created with the wrong dimension for whatever embedding
+  model is actually configured.
+
+**Candidates and jobs share one index**, distinguished by metadata rather
+than separate Pinecone indexes or namespaces:
+- Vector IDs: `candidate-{uuid}` / `job-{uuid}`
+- Metadata carries `type: "candidate" | "job"`
+- `query_similar_candidates()` explicitly filters on `type: candidate`, so
+  a job's query never accidentally matches against other jobs even though
+  they live in the same index.
+
+**Where it's used**:
+1. **On creation** — every candidate (`candidate_service.py`) and job
+   (`job_service.py`) gets embedded and upserted immediately, in the same
+   flow as the database write; a Pinecone failure rolls back the
+   Postgres write too (`VectorIndexingError`), so the two never drift out
+   of sync.
+2. **On screening** (`ranking.py` `rank_candidates_for_job`) — the job's
+   text is embedded once and used as the query vector; Pinecone's top-K
+   nearest neighbors (cosine similarity) become the shortlist the LLM then
+   re-ranks — the hybrid retrieval pattern described above.
+
+**Verified against a real index, not a mock**: `describe_index_stats()`
+returned `dimension=768, metric='cosine'`, and every Postgres candidate row
+with a `pinecone_id` set had exactly one matching real vector — confirmed
+by cross-referencing the two directly, not assumed.
 
 ## Prerequisites
 
@@ -110,6 +359,7 @@ already excluded by `.gitignore`. The example file is safe to commit.
 |----------|-----------|---------|
 | `APP_NAME` | No | Name displayed in the generated FastAPI documentation |
 | `DEBUG` | No | Local-development debug flag |
+| — | | Per-tenant API keys are stored in the `api_keys` table, not an env var — see [Authentication and multi-tenancy](#authentication-and-multi-tenancy) |
 | `DATABASE_URL` | Yes | SQLAlchemy connection URL for PostgreSQL |
 | `OLLAMA_BASE_URL` | Yes | Address of the Ollama server |
 | `OLLAMA_LLM_MODEL` | Yes | Chat model used to parse and evaluate resumes |
@@ -122,7 +372,11 @@ already excluded by `.gitignore`. The example file is safe to commit.
 | `PINECONE_REGION` | Yes for a new index | Pinecone serverless region |
 | `VECTOR_TOP_K` | No | Candidates retrieved by vector similarity (default `20`) |
 | `RANKING_TOP_N` | No | Final candidates returned after LLM ranking (default `5`) |
-| `AWS_REGION`, `SQS_QUEUE_URL`, `S3_BUCKET_NAME`, `DYNAMODB_TABLE_NAME` | Only for the worker | Real AWS resources the ingestion pipeline consumes — see `infra/terraform/` |
+| `RANKING_CONCURRENCY` | No | Candidate LLM evaluations run concurrently per `/screening/rank` call (default `5`) — only actually parallelizes if Ollama's `OLLAMA_NUM_PARALLEL` (set on the Ollama server/container, not this app) is at least this high; otherwise Ollama just queues the extra requests |
+| `AWS_REGION`, `SQS_QUEUE_URL`, `S3_BUCKET_NAME`, `DYNAMODB_TABLE_NAME` | Yes, for upload/worker | Real AWS resources the ingestion pipeline consumes — see `infra/terraform/`. Used by both the upload endpoint (producer) and the worker (consumer) |
+| `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` | Yes, for billing | From your Razorpay dashboard — see [Billing](#billing) |
+| `RAZORPAY_WEBHOOK_SECRET` | Yes, for billing | From your Razorpay webhook config; verifies `POST /billing/webhook` actually came from Razorpay |
+| `ADMIN_USERNAME`, `ADMIN_PASSWORD` | Yes, for the admin API | HTTP Basic credential for `/api/v1/admin/*` — see [Admin API](#admin-api) |
 
 Note: outside Docker, `127.0.0.1:5433`/`127.0.0.1:11435` (the values in
 `.env.example`) reach Postgres/Ollama through their Compose port mappings.

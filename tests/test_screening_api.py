@@ -1,12 +1,13 @@
 from uuid import uuid4
 
-from app.models.db import Candidate
+from app.models.db import Candidate, Tenant
 from app.services import ranking
 from tests.factories import make_match_explanation
 
 
-def _seed_candidate(db_session, full_name="Jane Doe") -> Candidate:
+def _seed_candidate(db_session, tenant: Tenant, full_name="Jane Doe") -> Candidate:
     candidate = Candidate(
+        tenant_id=tenant.id,
         full_name=full_name,
         summary="Backend engineer",
         skills=["Python", "SQL"],
@@ -27,14 +28,14 @@ def _create_job(client) -> str:
     return response.json()["id"]
 
 
-def test_rank_candidates_happy_path(client, db_session, mock_vector_store, monkeypatch):
-    candidate = _seed_candidate(db_session)
+def test_rank_candidates_happy_path(client, db_session, tenant, mock_vector_store, monkeypatch):
+    candidate = _seed_candidate(db_session, tenant)
     job_id = _create_job(client)
 
     monkeypatch.setattr(
         ranking.vector_store,
         "query_similar_candidates",
-        lambda job_text, top_k=20, job_id=None: [
+        lambda job_text, namespace, top_k=20: [
             {"candidate_id": str(candidate.id), "vector_score": 0.92, "metadata": {}}
         ],
     )
@@ -60,15 +61,15 @@ def test_rank_candidates_happy_path(client, db_session, mock_vector_store, monke
 
 
 def test_rank_candidates_by_job_id_path_happy_path(
-    client, db_session, mock_vector_store, monkeypatch
+    client, db_session, tenant, mock_vector_store, monkeypatch
 ):
-    candidate = _seed_candidate(db_session)
+    candidate = _seed_candidate(db_session, tenant)
     job_id = _create_job(client)
 
     monkeypatch.setattr(
         ranking.vector_store,
         "query_similar_candidates",
-        lambda job_text, top_k=20, job_id=None: [
+        lambda job_text, namespace, top_k=20: [
             {"candidate_id": str(candidate.id), "vector_score": 0.8, "metadata": {}}
         ],
     )

@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -5,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.models.db import Candidate, Job, MatchResult
 from app.models.schemas import MatchExplanation, RankedCandidate, ScreeningResponse
+from app.repositories import candidate_repository
 from app.services.embeddings import vector_store
 from app.services.matching import generate_match_explanation
 
@@ -40,6 +42,7 @@ def build_job_embed_text(job: Job) -> str:
 
 def rank_candidates_for_job(
     db: Session,
+    tenant_id: UUID,
     job: Job,
     top_k: int | None = None,
     top_n: int | None = None,
@@ -53,21 +56,32 @@ def rank_candidates_for_job(
     top_n = top_n or settings.ranking_top_n
 
     job_text = build_job_embed_text(job)
-    vector_matches = vector_store.query_similar_candidates(job_text, top_k=top_k)
+    vector_matches = vector_store.query_similar_candidates(
+        job_text, namespace=str(tenant_id), top_k=top_k
+    )
 
     ranked: list[RankedCandidate] = []
-    llm_evaluations: list[tuple[Candidate, float, MatchExplanation]] = []
 
+    # Resolve candidates first, sequentially - this is a fast DB read, and
+    # keeps the one SQLAlchemy session single-threaded (sessions aren't
+    # thread-safe, so all DB reads stay on the main thread).
+    resolved: list[tuple[Candidate, float]] = []
     for match in vector_matches:
         candidate_id = match.get("candidate_id")
         if not candidate_id:
             continue
 
-        candidate = db.query(Candidate).filter(Candidate.id == UUID(candidate_id)).first()
+        # tenant_id filter is defense in depth: even if the Pinecone
+        # namespace above were ever misconfigured, this can't resolve a
+        # different tenant's candidate row.
+        candidate = candidate_repository.get_by_id(db, tenant_id, UUID(candidate_id))
         if not candidate:
             continue
 
-        explanation = generate_match_explanation(
+        resolved.append((candidate, match["vector_score"]))
+
+    def _evaluate(candidate: Candidate) -> MatchExplanation:
+        return generate_match_explanation(
             job_title=job.title,
             company=job.company,
             job_description=job.description,
@@ -80,13 +94,24 @@ def rank_candidates_for_job(
             candidate_education=candidate.education or [],
         )
 
-        llm_evaluations.append(
-            (
-                candidate,
-                match["vector_score"],
-                explanation,
-            )
-        )
+    # The LLM call per candidate is the slow part - a full local-model
+    # generation each - and touches no DB session, so it's safe to fire
+    # concurrently. This is what actually cuts wall-clock latency: these
+    # used to be issued one at a time, so ranking a top_k=20 shortlist
+    # meant 20 sequential model generations before a response went out.
+    # Ollama itself must also be configured to actually process requests
+    # in parallel (OLLAMA_NUM_PARALLEL) or it just queues them - see
+    # settings.ranking_concurrency and the README note next to it.
+    if resolved:
+        with ThreadPoolExecutor(max_workers=settings.ranking_concurrency) as pool:
+            explanations = list(pool.map(_evaluate, [candidate for candidate, _ in resolved]))
+    else:
+        explanations = []
+
+    llm_evaluations: list[tuple[Candidate, float, MatchExplanation]] = [
+        (candidate, vector_score, explanation)
+        for (candidate, vector_score), explanation in zip(resolved, explanations)
+    ]
 
     llm_evaluations.sort(key=lambda x: x[2].score, reverse=True)
     shortlist = llm_evaluations[:top_n]
