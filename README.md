@@ -19,12 +19,12 @@ flowchart TD
     end
 
     subgraph Billing["2. Billing (Razorpay)"]
-        B1["API: POST /api/v1/billing/subscribe<br/>(tenant, X-API-Key)"] --> B2["Razorpay hosted checkout<br/>(external, not our API)"]
+        B1["API: POST /api/v1/billing/subscribe<br/>(tenant, API key or JWT)"] --> B2["Razorpay hosted checkout<br/>(external, not our API)"]
         B2 --> B3["API: POST /api/v1/billing/webhook<br/>Razorpay calls us - signature verified on raw body"]
     end
 
     subgraph Ingestion["3. Candidate ingestion (event-driven, AWS)"]
-        C1["API: POST /api/v1/candidates/upload<br/>(tenant, X-API-Key)<br/>quota checked first"] --> C2["internal: Candidate row created<br/>(status = pending), PDF to S3"]
+        C1["API: POST /api/v1/candidates/upload<br/>(tenant, API key or JWT)<br/>quota checked first"] --> C2["internal: Candidate row created<br/>(status = pending), PDF to S3"]
         C2 --> C3["internal: message to SQS<br/>202 returned to tenant"]
         C3 --> C4["internal: worker polls SQS,<br/>downloads PDF from S3"]
         C4 --> C5["internal: Ollama LLM parses;<br/>embeds into Pinecone (ns = tenant_id)"]
@@ -33,11 +33,11 @@ flowchart TD
     end
 
     subgraph JobCreation["4. Job creation"]
-        D1["API: POST /api/v1/jobs/<br/>(tenant, X-API-Key)"] --> D2["internal: job text embedded,<br/>stored in Pinecone (ns = tenant_id)"]
+        D1["API: POST /api/v1/jobs/<br/>(tenant, API key or JWT)"] --> D2["internal: job text embedded,<br/>stored in Pinecone (ns = tenant_id)"]
     end
 
     subgraph Ranking["5. Screening & ranking"]
-        E1["API: POST /api/v1/screening/rank<br/>(tenant, X-API-Key)"] --> E2["internal: Pinecone top-K query,<br/>scoped to tenant namespace"]
+        E1["API: POST /api/v1/screening/rank<br/>(tenant, API key or JWT)"] --> E2["internal: Pinecone top-K query,<br/>scoped to tenant namespace"]
         E2 --> E3["internal: Postgres re-checks tenant_id<br/>(defense in depth)"]
         E3 --> E4["internal: LLM scores each candidate<br/>concurrently (thread pool)"]
         E4 --> E5["internal: ranked results (score 0-100,<br/>strengths/gaps) saved - returned as E1's response"]
