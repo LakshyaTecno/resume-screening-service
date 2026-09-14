@@ -11,37 +11,46 @@ result:
 ```mermaid
 flowchart TD
     subgraph Provisioning["1. Provisioning (admin-only, one-time)"]
-        A1["Admin"] --> A2["POST /admin/tenants"] --> A3["Tenant + API key issued<br/>(key hashed, shown once)"]
+        A1["Admin"] --> A2["API: POST /api/v1/admin/tenants<br/>creates the tenant"]
+        A2 --> A3["API: POST /api/v1/admin/tenants/{id}/api-keys<br/>issues a key for it"]
+        A3 --> A4["Raw API key returned<br/>(hashed at rest, shown once)"]
     end
 
     subgraph Billing["2. Billing (Razorpay)"]
-        B1["Tenant: POST /billing/subscribe"] --> B2["Razorpay hosted checkout"] --> B3["POST /billing/webhook<br/>(signature verified on raw body)"]
+        B1["API: POST /api/v1/billing/subscribe<br/>(tenant, X-API-Key)"] --> B2["Razorpay hosted checkout<br/>(external, not our API)"]
+        B2 --> B3["API: POST /api/v1/billing/webhook<br/>Razorpay calls us - signature verified on raw body"]
     end
 
     subgraph Ingestion["3. Candidate ingestion (event-driven, AWS)"]
-        C1["Tenant: POST /candidates/upload<br/>quota checked first"] --> C2["Candidate row created<br/>(status = pending), PDF to S3"]
-        C2 --> C3["Message to SQS<br/>202 returned to tenant"]
-        C3 --> C4["Worker polls SQS,<br/>downloads PDF from S3"]
-        C4 --> C5["Ollama LLM parses;<br/>embeds into Pinecone (ns = tenant_id)"]
-        C5 --> C6["Status updated:<br/>processed (stays 'processing' on transient failure)"]
+        C1["API: POST /api/v1/candidates/upload<br/>(tenant, X-API-Key)<br/>quota checked first"] --> C2["internal: Candidate row created<br/>(status = pending), PDF to S3"]
+        C2 --> C3["internal: message to SQS<br/>202 returned to tenant"]
+        C3 --> C4["internal: worker polls SQS,<br/>downloads PDF from S3"]
+        C4 --> C5["internal: Ollama LLM parses;<br/>embeds into Pinecone (ns = tenant_id)"]
+        C5 --> C6["internal: status updated to processed<br/>(stays 'processing' on transient failure)"]
+        C6 --> C7["API: GET /api/v1/candidates/{id}<br/>tenant polls this to see status"]
     end
 
     subgraph JobCreation["4. Job creation"]
-        D1["Tenant: POST /jobs/"] --> D2["Job text embedded,<br/>stored in Pinecone (ns = tenant_id)"]
+        D1["API: POST /api/v1/jobs/<br/>(tenant, X-API-Key)"] --> D2["internal: job text embedded,<br/>stored in Pinecone (ns = tenant_id)"]
     end
 
     subgraph Ranking["5. Screening & ranking"]
-        E1["Tenant: POST /screening/rank"] --> E2["Pinecone top-K query,<br/>scoped to tenant namespace"]
-        E2 --> E3["Postgres re-checks tenant_id<br/>(defense in depth)"]
-        E3 --> E4["LLM scores each candidate<br/>concurrently (thread pool)"]
-        E4 --> E5["Ranked results (score 0-100,<br/>strengths/gaps) saved + returned"]
+        E1["API: POST /api/v1/screening/rank<br/>(tenant, X-API-Key)"] --> E2["internal: Pinecone top-K query,<br/>scoped to tenant namespace"]
+        E2 --> E3["internal: Postgres re-checks tenant_id<br/>(defense in depth)"]
+        E3 --> E4["internal: LLM scores each candidate<br/>concurrently (thread pool)"]
+        E4 --> E5["internal: ranked results (score 0-100,<br/>strengths/gaps) saved - returned as E1's response"]
     end
 
-    A3 -.-> C1
-    A3 -.-> D1
-    A3 -.-> E1
+    A4 -.-> C1
+    A4 -.-> D1
+    A4 -.-> E1
     B3 -.->|active subscription| C1
 ```
+
+`API:`-prefixed boxes are real HTTP calls into this service (or, for the
+webhook, a call Razorpay makes into it); `internal:`-prefixed boxes are
+things that happen as a consequence of one of those calls, not endpoints
+you can hit yourself.
 
 An admin provisions a tenant and its API key once (stage 1). Everything
 after that is tenant-initiated and scoped to that tenant end to end: a
