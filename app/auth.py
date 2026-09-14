@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app import jwt_auth
 from app.database import get_db
 from app.models.db import ApiKey
 
@@ -47,3 +48,38 @@ async def require_api_key(
     api_key.last_used_at = datetime.now(timezone.utc)
     db.commit()
     return api_key.tenant_id
+
+
+async def require_tenant(
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> UUID:
+    """Resolves either a JWT session token (self-registered tenants, see
+    app/jwt_auth.py and app/routers/auth.py) or an X-API-Key
+    (admin-issued or self-service-issued, see require_api_key above) to
+    the same tenant_id - the two auth modes are equally valid on every
+    route that used to only accept require_api_key.
+
+    If an Authorization header is present at all, it's treated as
+    authoritative and must be a valid 'Bearer <token>' - it does not
+    silently fall back to X-API-Key on failure, since that could mask a
+    real bug (an expired session token) as a confusing, unrelated
+    "missing API key" error instead. X-API-Key is only consulted when no
+    Authorization header was sent."""
+    if authorization is not None:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() != "bearer" or not token:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Malformed Authorization header - expected 'Bearer <token>'.",
+            )
+        tenant_id = jwt_auth.decode_access_token(token)
+        if tenant_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired session token.",
+            )
+        return tenant_id
+
+    return await require_api_key(x_api_key=x_api_key, db=db)

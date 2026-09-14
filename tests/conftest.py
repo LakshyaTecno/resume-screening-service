@@ -9,7 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.auth import require_api_key
+from app.auth import require_api_key, require_tenant
 from app.billing_guard import enforce_quota
 from app.database import Base, get_db
 from app.main import app
@@ -96,21 +96,28 @@ def client(db_session: Session, tenant: Tenant) -> Generator[TestClient, None, N
         yield db_session
 
     app.dependency_overrides[get_db] = _get_db_override
+    # require_tenant is what every router actually depends on now
+    # (require_api_key is still overridden too, in case anything calls
+    # it directly - harmless belt-and-suspenders, not load-bearing).
     app.dependency_overrides[require_api_key] = lambda: tenant.id
+    app.dependency_overrides[require_tenant] = lambda: tenant.id
     app.dependency_overrides[enforce_quota] = lambda: tenant.id
     try:
         yield TestClient(app)
     finally:
         app.dependency_overrides.pop(get_db, None)
         app.dependency_overrides.pop(require_api_key, None)
+        app.dependency_overrides.pop(require_tenant, None)
         app.dependency_overrides.pop(enforce_quota, None)
 
 
 @pytest.fixture
 def authenticated_client(db_session: Session) -> Generator[TestClient, None, None]:
-    """TestClient with only get_db overridden - the real require_api_key
-    dependency runs, so tests using this fixture exercise actual auth
-    enforcement (see test_auth.py)."""
+    """TestClient with only get_db overridden - the real require_tenant
+    dependency runs (which itself falls through to the real
+    require_api_key when no Authorization header is sent), so tests using
+    this fixture exercise actual auth enforcement (see test_auth.py,
+    test_tenant_auth.py)."""
 
     def _get_db_override():
         yield db_session

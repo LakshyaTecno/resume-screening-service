@@ -111,11 +111,26 @@ def count_candidates_this_period(db: Session, tenant_id: UUID, period_start: dat
     )
 
 
-def current_period_start(subscription: Subscription) -> datetime:
+def count_all_time_candidates(db: Session, tenant_id: UUID) -> int:
+    """Unlike count_candidates_this_period, no period_start filter at
+    all - this is the free-tier lifetime cap (billing_guard.enforce_quota
+    with no active subscription), which never resets, unlike a paid
+    plan's monthly quota."""
+    return (
+        db.scalar(
+            select(func.count()).select_from(Candidate).where(Candidate.tenant_id == tenant_id)
+        )
+        or 0
+    )
+
+
+def current_period_start(subscription: Subscription, plan: Plan) -> datetime:
     """Best-effort period start when Razorpay hasn't told us current_end
     yet (e.g. before the first charge webhook arrives) - falls back to a
-    30-day rolling window from now rather than the subscription's whole
-    lifetime, so quota isn't calculated against an unbounded window."""
+    rolling window sized to the plan's own duration_months rather than
+    the subscription's whole lifetime, so quota isn't calculated against
+    an unbounded window."""
+    window = timedelta(days=30 * plan.duration_months)
     if subscription.current_period_end is not None:
-        return subscription.current_period_end - timedelta(days=30)
-    return datetime.now(timezone.utc) - timedelta(days=30)
+        return subscription.current_period_end - window
+    return datetime.now(timezone.utc) - window

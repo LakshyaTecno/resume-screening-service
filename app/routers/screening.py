@@ -3,7 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.auth import require_api_key
+from app.auth import require_tenant
 from app.database import get_db
 from app.exceptions import ResourceNotFoundError
 from app.models.schemas import ScreeningRequest, ScreeningResponse
@@ -16,7 +16,7 @@ router = APIRouter(prefix="/screening", tags=["screening"])
 @router.post("/rank", response_model=ScreeningResponse)
 def rank_candidates(
     payload: ScreeningRequest,
-    tenant_id: UUID = Depends(require_api_key),
+    tenant_id: UUID = Depends(require_tenant),
     db: Session = Depends(get_db),
 ):
     try:
@@ -38,7 +38,7 @@ def rank_candidates_by_id(
     job_id: UUID,
     top_k: int | None = None,
     top_n: int | None = None,
-    tenant_id: UUID = Depends(require_api_key),
+    tenant_id: UUID = Depends(require_tenant),
     db: Session = Depends(get_db),
 ):
     try:

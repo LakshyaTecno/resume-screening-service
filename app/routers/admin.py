@@ -1,5 +1,5 @@
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.admin_auth import require_admin
 from app.auth import _hash_key
+from app.config import get_settings
 from app.database import get_db
 from app.models.db import ApiKey, Plan, Subscription, Tenant
 from app.models.schemas import (
@@ -20,8 +21,13 @@ from app.models.schemas import (
     TenantResponse,
     TenantUsageResponse,
 )
-from app.services.billing_service import count_candidates_this_period, current_period_start
+from app.services.billing_service import (
+    count_all_time_candidates,
+    count_candidates_this_period,
+    current_period_start,
+)
 
+settings = get_settings()
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 
 
@@ -103,6 +109,7 @@ def create_plan(payload: PlanCreate, db: Session = Depends(get_db)):
         price=payload.price,
         currency=payload.currency,
         monthly_resume_quota=payload.monthly_resume_quota,
+        duration_months=payload.duration_months,
         razorpay_plan_id=payload.razorpay_plan_id,
     )
     db.add(plan)
@@ -126,18 +133,25 @@ def get_tenant_usage(tenant_id: UUID, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Tenant not found")
 
     subscription = db.scalar(select(Subscription).where(Subscription.tenant_id == tenant_id))
-    plan = db.get(Plan, subscription.plan_id) if subscription else None
+    active = subscription is not None and subscription.status == "active"
 
-    # Shares billing_guard.enforce_quota's exact period-start logic so this
-    # view can never disagree with what actually gates uploads.
-    period_start = (
-        current_period_start(subscription)
-        if subscription
-        else datetime.now(timezone.utc) - timedelta(days=30)
-    )
+    # Mirrors billing_guard.enforce_quota's exact branching (free-tier
+    # lifetime count vs. active-plan period count) so this view can never
+    # disagree with what actually gates uploads.
+    if not active:
+        return TenantUsageResponse(
+            tenant_id=tenant_id,
+            is_free_tier=True,
+            candidates_this_period=count_all_time_candidates(db, tenant_id),
+            monthly_resume_quota=None,
+            free_tier_limit=settings.free_tier_resume_limit,
+        )
 
+    plan = db.get(Plan, subscription.plan_id)
+    period_start = current_period_start(subscription, plan)
     return TenantUsageResponse(
         tenant_id=tenant_id,
+        is_free_tier=False,
         candidates_this_period=count_candidates_this_period(db, tenant_id, period_start),
-        monthly_resume_quota=plan.monthly_resume_quota if plan else None,
+        monthly_resume_quota=plan.monthly_resume_quota,
     )

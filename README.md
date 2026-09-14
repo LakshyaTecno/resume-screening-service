@@ -10,10 +10,12 @@ result:
 
 ```mermaid
 flowchart TD
-    subgraph Provisioning["1. Provisioning (admin-only, one-time)"]
+    subgraph Provisioning["1. Provisioning - two ways in"]
         A1["Admin"] --> A2["API: POST /api/v1/admin/tenants<br/>creates the tenant"]
         A2 --> A3["API: POST /api/v1/admin/tenants/{id}/api-keys<br/>issues a key for it"]
         A3 --> A4["Raw API key returned<br/>(hashed at rest, shown once)"]
+        A5["Tenant, self-service"] --> A6["API: POST /api/v1/auth/register (or /login, /google)"]
+        A6 --> A7["JWT returned<br/>(same tenant_id concept, no admin involved)"]
     end
 
     subgraph Billing["2. Billing (Razorpay)"]
@@ -44,6 +46,9 @@ flowchart TD
     A4 -.-> C1
     A4 -.-> D1
     A4 -.-> E1
+    A7 -.-> C1
+    A7 -.-> D1
+    A7 -.-> E1
     B3 -.->|active subscription| C1
 ```
 
@@ -52,8 +57,11 @@ webhook, a call Razorpay makes into it); `internal:`-prefixed boxes are
 things that happen as a consequence of one of those calls, not endpoints
 you can hit yourself.
 
-An admin provisions a tenant and its API key once (stage 1). Everything
-after that is tenant-initiated and scoped to that tenant end to end: a
+A tenant gets into the system one of two ways (stage 1) - admin-provisioned
+(API key) or self-registered (JWT, via email/password or Google) - and
+everything downstream treats the two identically, since both resolve to
+the same `tenant_id` through `require_tenant`. Everything after that is
+tenant-initiated and scoped to that tenant end to end: a
 subscription gates resume uploads (stage 2 → 3), uploads and jobs both
 land in Pinecone under that tenant's own namespace (stages 3 and 4), and
 ranking only ever searches within it, with Postgres independently
@@ -189,7 +197,39 @@ revoked key are all indistinguishable to a caller - every one of them is a
 
 Tenant and API-key management lives under `/api/v1/admin/*` - see
 [Admin API](#admin-api) below. It's a separate credential from tenant API
-keys, since an admin operates across every tenant.
+keys, since an admin operates across every tenant. Admin-provisioning
+still works and still matters for support/manual onboarding - it's just
+no longer the only door in, see below.
+
+### Self-service registration and JWT login
+
+Alongside admin-provisioned API keys, a tenant can now register directly:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/v1/auth/register` | Email + password - creates the tenant, returns a JWT |
+| `POST` | `/api/v1/auth/login` | Email + password - returns a JWT for an existing tenant |
+| `POST` | `/api/v1/auth/google` | Google ID token - sign-up *or* login, whichever applies |
+
+The returned JWT works anywhere an API key would:
+[`app/auth.py`](app/auth.py)'s `require_tenant` dependency accepts either
+an `Authorization: Bearer <token>` header or an `X-API-Key` header,
+resolving both to the same `tenant_id` - every router now depends on
+`require_tenant`, not `require_api_key` directly, so this is additive,
+not a breaking change to anything already using an API key.
+
+Passwords are hashed with `bcrypt` (a slow hash, deliberately - unlike
+`api_keys.hashed_key`'s SHA-256, this *is* a real user-chosen password,
+so a slow hash is the whole point, see the comment on that column for
+the SHA-256 reasoning by contrast). Google sign-up verifies the ID
+token's signature against Google's own public keys
+(`google.oauth2.id_token.verify_oauth2_token`), not just decodes it - a
+forged or expired token is rejected with 401.
+
+`JWT_SECRET` fails closed the same way `ADMIN_USERNAME`/`ADMIN_PASSWORD`
+do: unset, and `/auth/register`/`/auth/login`/`/auth/google` all 503
+rather than issuing a token that could never be trusted anyway (PyJWT
+itself refuses to sign with an empty key).
 
 ## Billing
 
@@ -202,12 +242,23 @@ Razorpay-backed subscriptions gate the resume-consuming endpoints:
 
 `POST /api/v1/candidates/upload` is gated by
 [`app/billing_guard.py`](app/billing_guard.py)'s `enforce_quota` dependency
-in place of plain `require_api_key`: no active subscription, or a plan's
-`monthly_resume_quota` already used up, both return `402 Payment Required`.
-Quota is counted live from `candidates` rows created in the current
-billing period, not a separate running counter - always correct by
-construction, no risk of drifting out of sync with reality if a webhook
-is ever missed.
+in place of plain `require_tenant`. It branches on subscription state:
+
+- **No active subscription** - a tenant still gets a **free-tier lifetime
+  allowance** (`FREE_TIER_RESUME_LIMIT`, default 20) before needing to
+  subscribe at all. This is a lifetime count of *all* `candidates` rows
+  the tenant has ever created, not period-scoped - it never resets, unlike
+  the quota below.
+- **Active subscription** - the plan's `monthly_resume_quota` applies
+  instead, counted over the current billing period (sized to the plan's
+  own `duration_months` - 1, 3, 6, or 12 - via
+  `billing_service.current_period_start`).
+
+Both branches count live `candidates` rows rather than a separate running
+counter - always correct by construction, no risk of drifting out of sync
+with reality if a webhook is ever missed. `GET
+/api/v1/admin/tenants/{id}/usage` mirrors this exact branching so the
+admin view can never disagree with what actually gates uploads.
 
 One subscription per tenant (`subscriptions.tenant_id` is unique) - not a
 history table. Changing plans updates the existing row.

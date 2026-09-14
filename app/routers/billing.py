@@ -4,7 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from app.auth import require_api_key
+from app.auth import require_tenant
 from app.database import get_db
 from app.exceptions import ResourceNotFoundError
 from app.models.schemas import SubscribeRequest, SubscribeResponse
@@ -16,7 +16,7 @@ router = APIRouter(prefix="/billing", tags=["billing"])
 @router.post("/subscribe", response_model=SubscribeResponse)
 def subscribe(
     payload: SubscribeRequest,
-    tenant_id: UUID = Depends(require_api_key),
+    tenant_id: UUID = Depends(require_tenant),
     db: Session = Depends(get_db),
 ):
     try:

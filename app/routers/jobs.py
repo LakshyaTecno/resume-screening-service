@@ -3,7 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.auth import require_api_key
+from app.auth import require_tenant
 from app.database import get_db
 from app.exceptions import ResourceNotFoundError, VectorIndexingError
 from app.models.schemas import JobCreate, JobResponse
@@ -15,7 +15,7 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 @router.post("/", response_model=JobResponse, status_code=201)
 def create_job(
     payload: JobCreate,
-    tenant_id: UUID = Depends(require_api_key),
+    tenant_id: UUID = Depends(require_tenant),
     db: Session = Depends(get_db),
 ):
     try:
@@ -25,14 +25,14 @@ def create_job(
 
 
 @router.get("/", response_model=list[JobResponse])
-def list_jobs(tenant_id: UUID = Depends(require_api_key), db: Session = Depends(get_db)):
+def list_jobs(tenant_id: UUID = Depends(require_tenant), db: Session = Depends(get_db)):
     return job_service.list_jobs(db, tenant_id)
 
 
 @router.get("/{job_id}", response_model=JobResponse)
 def get_job(
     job_id: UUID,
-    tenant_id: UUID = Depends(require_api_key),
+    tenant_id: UUID = Depends(require_tenant),
     db: Session = Depends(get_db),
 ):
     try:

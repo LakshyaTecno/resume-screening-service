@@ -3,7 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
-from app.auth import require_api_key
+from app.auth import require_tenant
 from app.billing_guard import enforce_quota
 from app.database import get_db
 from app.exceptions import ResourceNotFoundError, VectorIndexingError
@@ -16,7 +16,7 @@ router = APIRouter(prefix="/candidates", tags=["candidates"])
 @router.post("/", response_model=CandidateResponse, status_code=201)
 def create_candidate(
     payload: CandidateCreate,
-    tenant_id: UUID = Depends(require_api_key),
+    tenant_id: UUID = Depends(require_tenant),
     db: Session = Depends(get_db),
 ):
     try:
@@ -42,14 +42,14 @@ def upload_resume(
 
 
 @router.get("/", response_model=list[CandidateResponse])
-def list_candidates(tenant_id: UUID = Depends(require_api_key), db: Session = Depends(get_db)):
+def list_candidates(tenant_id: UUID = Depends(require_tenant), db: Session = Depends(get_db)):
     return candidate_service.list_candidates(db, tenant_id)
 
 
 @router.get("/{candidate_id}", response_model=CandidateResponse)
 def get_candidate(
     candidate_id: UUID,
-    tenant_id: UUID = Depends(require_api_key),
+    tenant_id: UUID = Depends(require_tenant),
     db: Session = Depends(get_db),
 ):
     try:

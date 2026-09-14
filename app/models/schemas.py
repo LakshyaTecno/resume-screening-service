@@ -105,7 +105,28 @@ class TenantResponse(BaseModel):
 
     id: UUID
     name: str
+    email: str | None = None
     created_at: datetime
+
+
+class RegisterRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8)
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class GoogleAuthRequest(BaseModel):
+    id_token: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    tenant_id: UUID
 
 
 class ApiKeyResponse(BaseModel):
@@ -131,6 +152,7 @@ class PlanCreate(BaseModel):
     price: int
     currency: str = "INR"
     monthly_resume_quota: int | None = None
+    duration_months: int = Field(default=1, description="1, 3, 6, or 12")
     razorpay_plan_id: str
 
 
@@ -142,6 +164,7 @@ class PlanResponse(BaseModel):
     price: int
     currency: str
     monthly_resume_quota: int | None
+    duration_months: int
     razorpay_plan_id: str
 
 
@@ -157,8 +180,12 @@ class AdminSubscriptionResponse(BaseModel):
 
 class TenantUsageResponse(BaseModel):
     tenant_id: UUID
+    is_free_tier: bool
+    # Free tier: lifetime count against free_tier_limit, never resets.
+    # Paid plan: current-period count against monthly_resume_quota.
     candidates_this_period: int
     monthly_resume_quota: int | None
+    free_tier_limit: int | None = None
 
 
 class SubscribeRequest(BaseModel):

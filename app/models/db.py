@@ -13,6 +13,14 @@ class Tenant(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # All three nullable: an admin-created tenant (POST /admin/tenants)
+    # never has any of these and authenticates via API key only. A
+    # self-registered tenant has exactly one of hashed_password (email
+    # sign-up) or google_sub (Google sign-up) set, never both. email is
+    # nullable too, since admin-created tenants don't have one either.
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
+    hashed_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    google_sub: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -106,6 +114,11 @@ class Plan(Base):
     price: Mapped[int] = mapped_column(nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="INR")
     monthly_resume_quota: Mapped[int | None] = mapped_column(nullable=True)  # None = unlimited
+    # 1, 3, 6, or 12 - not enforced as an enum at the DB level, validated
+    # in PlanCreate instead. Purely informational plus the fallback-window
+    # math in billing_service.current_period_start; Razorpay's own Plan
+    # object (razorpay_plan_id) is what actually governs billing cadence.
+    duration_months: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
     razorpay_plan_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

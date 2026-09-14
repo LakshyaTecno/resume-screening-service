@@ -48,6 +48,17 @@ class Settings(BaseSettings):
     admin_username: str = ""
     admin_password: str = ""
 
+    # Self-service tenant auth (app/jwt_auth.py, app/routers/auth.py) -
+    # sits alongside require_api_key, not instead of it. Empty secret
+    # fails closed the same way admin_username/admin_password do.
+    jwt_secret: str = ""
+    jwt_expiry_minutes: int = Field(default=1440, gt=0)
+    google_oauth_client_id: str = ""
+
+    # Lifetime cap (not period-scoped) for a tenant with no active
+    # subscription - see billing_guard.enforce_quota's free-tier branch.
+    free_tier_resume_limit: int = Field(default=20, gt=0)
+
 
 @lru_cache
 def get_settings() -> Settings:

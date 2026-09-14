@@ -150,10 +150,37 @@ def test_webhook_invalid_signature_returns_400(authenticated_client, monkeypatch
     assert response.status_code == 400
 
 
-def test_upload_without_subscription_returns_402(
-    authenticated_client, db_session, mock_vector_store
+def test_upload_without_subscription_succeeds_under_free_tier(
+    authenticated_client, db_session, mock_vector_store, monkeypatch
 ):
+    """No subscription no longer means an immediate 402 - a tenant gets a
+    free-tier lifetime allowance (settings.free_tier_resume_limit) first.
+    See test_upload_without_subscription_over_free_tier_returns_402 for
+    what happens once that's used up."""
     _seed_tenant_with_key(db_session)
+    monkeypatch.setattr(
+        candidate_service.ingestion,
+        "upload_resume_and_enqueue",
+        lambda candidate_id, tenant_id, file_bytes: None,
+    )
+
+    response = authenticated_client.post(
+        "/api/v1/candidates/upload",
+        headers={"X-API-Key": "billing-test-key"},
+        files={"file": ("resume.pdf", b"%PDF-1.4 fake bytes", "application/pdf")},
+    )
+
+    assert response.status_code == 202
+
+
+def test_upload_without_subscription_over_free_tier_returns_402(
+    authenticated_client, db_session, mock_vector_store, monkeypatch
+):
+    tenant = _seed_tenant_with_key(db_session)
+    limit = get_settings().free_tier_resume_limit
+    for _ in range(limit):
+        db_session.add(Candidate(tenant_id=tenant.id, status="processed"))
+    db_session.commit()
 
     response = authenticated_client.post(
         "/api/v1/candidates/upload",
@@ -162,6 +189,7 @@ def test_upload_without_subscription_returns_402(
     )
 
     assert response.status_code == 402
+    assert "Free tier" in response.json()["detail"]
 
 
 def test_upload_under_quota_succeeds(
