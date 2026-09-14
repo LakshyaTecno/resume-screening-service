@@ -1,8 +1,8 @@
 # The queue app/worker.py long-polls. Deliberately plain SQS, no SNS in
 # front of it - SNS's whole value is fanning one event out to *multiple*
-# consumers, and this project only ever has one (this worker). Whatever
-# publishes here (Service A's "Lambda A", per the architecture) sends
-# directly to this queue.
+# consumers, and this project only ever has one (this worker). This
+# service's own upload endpoint (app/services/ingestion.py) publishes here
+# directly - it isn't an external service's responsibility.
 resource "aws_sqs_queue" "resume_uploaded" {
   name = var.sqs_queue_name
 

@@ -106,3 +106,19 @@ def make_job_create(**overrides) -> JobCreate:
     )
     defaults.update(overrides)
     return JobCreate(**defaults)
+
+
+def make_razorpay_webhook_payload(
+    event: str = "subscription.activated",
+    razorpay_subscription_id: str = "sub_test123",
+    current_end: int | None = None,
+) -> dict:
+    """Shape of a Razorpay webhook body, trimmed to the fields
+    billing_service.handle_webhook_event actually reads."""
+    entity: dict = {"id": razorpay_subscription_id, "status": "active"}
+    if current_end is not None:
+        entity["current_end"] = current_end
+    return {
+        "event": event,
+        "subscription": {"entity": entity},
+    }

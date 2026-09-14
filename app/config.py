@@ -25,6 +25,10 @@ class Settings(BaseSettings):
 
     vector_top_k: int = Field(default=20, gt=0)
     ranking_top_n: int = Field(default=5, gt=0)
+    # How many candidates' LLM evaluations run concurrently per /screening/rank
+    # call. Only helps if Ollama is actually configured to process that many
+    # requests in parallel - see OLLAMA_NUM_PARALLEL in the README.
+    ranking_concurrency: int = Field(default=5, gt=0)
 
     # Event-driven ingestion worker (app/worker.py)
     aws_region: str = "us-east-1"
@@ -32,6 +36,28 @@ class Settings(BaseSettings):
     s3_bucket_name: str = ""
     dynamodb_table_name: str = "resume-processing-status"
     worker_metrics_port: int = Field(default=9100, gt=0)
+
+    # Razorpay billing (app/services/billing_service.py, app/routers/billing.py)
+    razorpay_key_id: str = ""
+    razorpay_key_secret: str = ""
+    razorpay_webhook_secret: str = ""
+
+    # Admin API (app/admin_auth.py, app/routers/admin.py) - HTTP Basic,
+    # a single operator credential, not tenant API keys. Empty by default,
+    # same fail-closed intent as require_api_key.
+    admin_username: str = ""
+    admin_password: str = ""
+
+    # Self-service tenant auth (app/jwt_auth.py, app/routers/auth.py) -
+    # sits alongside require_api_key, not instead of it. Empty secret
+    # fails closed the same way admin_username/admin_password do.
+    jwt_secret: str = ""
+    jwt_expiry_minutes: int = Field(default=1440, gt=0)
+    google_oauth_client_id: str = ""
+
+    # Lifetime cap (not period-scoped) for a tenant with no active
+    # subscription - see billing_guard.enforce_quota's free-tier branch.
+    free_tier_resume_limit: int = Field(default=20, gt=0)
 
 
 @lru_cache
