@@ -2,15 +2,40 @@ import json
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth import require_tenant
 from app.database import get_db
 from app.exceptions import ResourceNotFoundError
-from app.models.schemas import SubscribeRequest, SubscribeResponse
+from app.models.db import Plan, Subscription
+from app.models.schemas import (
+    PlanResponse,
+    SubscribeRequest,
+    SubscribeResponse,
+    TenantSubscriptionResponse,
+)
 from app.services import billing_service
 
 router = APIRouter(prefix="/billing", tags=["billing"])
+
+
+@router.get("/plans", response_model=list[PlanResponse])
+def list_plans(tenant_id: UUID = Depends(require_tenant), db: Session = Depends(get_db)):
+    """Tenant-facing plan list - GET /admin/plans exists too, but that's
+    behind admin HTTP Basic. A tenant needs to see what's available to
+    subscribe to; this is the same Plan rows, just reachable with a
+    tenant credential instead of an operator one."""
+    return list(db.scalars(select(Plan).order_by(Plan.price)).all())
+
+
+@router.get("/subscription", response_model=TenantSubscriptionResponse | None)
+def get_my_subscription(tenant_id: UUID = Depends(require_tenant), db: Session = Depends(get_db)):
+    """The calling tenant's own subscription, or null if they have none
+    yet - the admin equivalent (GET /admin/subscriptions?tenant_id=) can
+    see every tenant's; this can only ever see the caller's own, scoped
+    by require_tenant the same way every other tenant-facing route is."""
+    return db.scalar(select(Subscription).where(Subscription.tenant_id == tenant_id))
 
 
 @router.post("/subscribe", response_model=SubscribeResponse)

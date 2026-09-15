@@ -178,6 +178,18 @@ class AdminSubscriptionResponse(BaseModel):
     current_period_end: datetime | None
 
 
+class TenantSubscriptionResponse(BaseModel):
+    """Same shape as AdminSubscriptionResponse minus tenant_id - the
+    caller already knows who they are, no need to echo it back."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    plan_id: UUID
+    status: str
+    current_period_end: datetime | None
+
+
 class TenantUsageResponse(BaseModel):
     tenant_id: UUID
     is_free_tier: bool

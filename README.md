@@ -292,8 +292,52 @@ Creating an API key returns the raw key in the response body **exactly
 once** - only its hash is stored, so if it's lost, revoke it and issue a
 new one rather than trying to retrieve it.
 
-This is a JSON API only - no UI. A separate frontend against this API is
-the planned next step, not part of this service.
+This is a JSON API only - no UI, and stays that way; `frontend/` (below)
+is a separate app, not part of the Admin API's own scope.
+
+## Frontend
+
+`frontend/` - Next.js (App Router, TypeScript, Tailwind), covering every
+tenant-facing capability above except the Admin API (deliberately out of
+scope, same operator/tenant split the backend itself draws). Run it with:
+
+```bash
+cd frontend
+cp .env.local.example .env.local   # NEXT_PUBLIC_API_BASE_URL, optionally NEXT_PUBLIC_GOOGLE_CLIENT_ID
+npm install
+npm run dev
+```
+
+Needs the backend already running (`docker compose up -d --build` from
+the repo root) and reachable at `NEXT_PUBLIC_API_BASE_URL` (default
+`http://localhost:8000`) - `app/main.py`'s `CORSMiddleware` is what makes
+a browser on `localhost:3000` calling `localhost:8000` work at all
+(`CORS_ALLOWED_ORIGINS` in `.env`, defaults to the dev server's own port).
+
+**Pages**: `/register`, `/login` (email/password; Google sign-in renders
+automatically if `NEXT_PUBLIC_GOOGLE_CLIENT_ID` is set, stays hidden
+otherwise - see [`app/components/google-sign-in-button.tsx`](frontend/app/components/google-sign-in-button.tsx)),
+`/dashboard`, `/jobs` + `/jobs/[id]` (create, then rank candidates against
+one), `/candidates` + `/candidates/[id]` (upload, list, detail - polls
+while a resume is still `pending`/`processing`, the same contract
+documented above for `GET /candidates/{id}`), `/billing` (plans,
+subscribe, redirects to Razorpay's hosted checkout).
+
+**Two small additions this required on the backend, not just new frontend
+code**:
+- `GET /api/v1/billing/plans` and `GET /api/v1/billing/subscription` -
+  a tenant had no way to see available plans or their own subscription
+  before this; both existed only behind the Admin API.
+- `api`'s `docker-compose.yml` entry was missing the `~/.aws` credentials
+  mount `worker` already had - a real gap uncovered while testing an
+  actual upload through the UI, not something the API tests alone would
+  have caught, since `app/services/ingestion.py` (the API's own S3/SQS
+  producer code, added by the earlier async-upload redesign) needs it too.
+
+**Auth is deliberately simple**: a JWT in memory + `localStorage`, not
+httpOnly cookies with refresh-token rotation - matches the scope of this
+project rather than an oversight, see the comment at the top of
+[`frontend/lib/auth-context.tsx`](frontend/lib/auth-context.tsx).
 
 ## Features
 
@@ -581,6 +625,7 @@ resume-screening-service/
 │       └── ollama_client.py # LangChain Ollama wrappers
 ├── alembic/versions/                 # DB schema migrations
 ├── alembic.ini
+├── frontend/                          # Next.js UI - see Frontend above
 ├── .github/workflows/ci.yml          # CI + self-hosted-runner CD
 ├── infra/terraform/                  # DynamoDB, notifier Lambda, SQS, worker IAM
 ├── tests/                            # pytest, happy-path (see docs)
@@ -604,3 +649,4 @@ resume-screening-service/
   runner deploys via Compose) — see [Deployment](#deployment) above
 - **AWS (SQS, DynamoDB, Lambda, S3, IAM)** — the event-driven ingestion pipeline, via Terraform
 - **Prometheus** — metrics on both the API and worker
+- **Next.js + TypeScript + Tailwind** — `frontend/`, the tenant-facing UI — see [Frontend](#frontend) above

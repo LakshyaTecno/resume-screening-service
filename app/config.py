@@ -59,6 +59,13 @@ class Settings(BaseSettings):
     # subscription - see billing_guard.enforce_quota's free-tier branch.
     free_tier_resume_limit: int = Field(default=20, gt=0)
 
+    # frontend/ (see app/main.py's CORSMiddleware) - comma-separated
+    # origins allowed to call this API from a browser. Defaults to the
+    # Next.js dev server's own default port, not "*" - a browser-facing
+    # API needs an explicit allowlist, not a wildcard, once credentials
+    # (the Authorization header) are involved.
+    cors_allowed_origins: str = "http://localhost:3000"
+
 
 @lru_cache
 def get_settings() -> Settings:

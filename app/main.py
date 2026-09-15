@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.config import get_settings
@@ -13,6 +14,17 @@ app = FastAPI(
         "Uses LangChain + Ollama for local LLM inference and Pinecone for vector search."
     ),
     version="0.1.0",
+)
+
+# frontend/ runs on a different origin (localhost:3000) than the API
+# (localhost:8000) - without this, every browser fetch() call from it
+# fails at the CORS preflight before ever reaching a route.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in settings.cors_allowed_origins.split(",") if o.strip()],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Exposes GET /metrics: request count, latency, in-progress requests, all

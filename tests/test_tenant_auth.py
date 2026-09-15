@@ -185,12 +185,16 @@ def test_invalid_bearer_token_returns_401(authenticated_client, monkeypatch):
     assert response.status_code == 401
 
 
-def test_register_fails_closed_when_jwt_secret_is_unset(authenticated_client):
+def test_register_fails_closed_when_jwt_secret_is_unset(authenticated_client, monkeypatch):
     """PyJWT itself refuses to sign with an empty key, so an unset
     JWT_SECRET can't even issue a token in the first place - not "issues
     a token that later fails to verify," a stronger fail-closed property
-    than that. jwt_secret is "" by default in tests (nothing configured
-    it here)."""
+    than that. Explicitly set to "" here rather than assumed - unlike
+    every other test in this file, this one's entire point is what
+    happens when it's blank, so it shouldn't depend on whatever happens
+    to be in the real .env on whoever's machine runs this suite."""
+    monkeypatch.setattr(get_settings(), "jwt_secret", "")
+
     response = authenticated_client.post(
         "/api/v1/auth/register",
         json={"email": "no-secret@acme.example", "password": "correct-horse-battery"},

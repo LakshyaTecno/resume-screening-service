@@ -92,6 +92,45 @@ def test_subscribe_happy_path(authenticated_client, db_session, monkeypatch):
     assert subscription.razorpay_subscription_id == "sub_new123"
 
 
+def test_list_plans_is_reachable_with_a_tenant_key(authenticated_client, db_session):
+    """Unlike GET /admin/plans (HTTP Basic, operator-only), a tenant needs
+    to see what's available to subscribe to with their own credential."""
+    _seed_tenant_with_key(db_session)
+    _seed_plan(db_session)
+
+    response = authenticated_client.get(
+        "/api/v1/billing/plans", headers={"X-API-Key": "billing-test-key"}
+    )
+
+    assert response.status_code == 200
+    assert any(p["name"] == "Starter" for p in response.json())
+
+
+def test_get_my_subscription_returns_null_with_no_subscription(authenticated_client, db_session):
+    _seed_tenant_with_key(db_session)
+
+    response = authenticated_client.get(
+        "/api/v1/billing/subscription", headers={"X-API-Key": "billing-test-key"}
+    )
+
+    assert response.status_code == 200
+    assert response.json() is None
+
+
+def test_get_my_subscription_returns_only_the_callers_own(authenticated_client, db_session):
+    tenant = _seed_tenant_with_key(db_session, raw_key="mine-key")
+    _seed_tenant_with_key(db_session, raw_key="someone-elses-key")
+    plan = _seed_plan(db_session)
+    _seed_subscription(db_session, tenant, plan)
+
+    response = authenticated_client.get(
+        "/api/v1/billing/subscription", headers={"X-API-Key": "mine-key"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["plan_id"] == str(plan.id)
+
+
 def test_subscribe_unknown_plan_returns_404(authenticated_client, db_session):
     _seed_tenant_with_key(db_session)
 
